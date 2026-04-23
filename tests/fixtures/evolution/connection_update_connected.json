@@ -1,0 +1,8 @@
+{
+  "event": "connection.update",
+  "instance": "barra-vips-main",
+  "data": {
+    "state": "open",
+    "status": "CONNECTED"
+  }
+}

@@ -1,0 +1,16 @@
+[project]
+name = "barra-vips-api"
+version = "0.1.0"
+description = "Operational API for the Barra Vips MVP."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic>=2,<3",
+  "python-dotenv>=1,<2",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn[standard]>=0.34,<1"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

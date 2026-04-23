@@ -1,0 +1,11 @@
+[project]
+name = "barra-vips-contracts"
+version = "0.1.0"
+description = "Versioned contracts for the Barra Vips MVP."
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2,<3"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

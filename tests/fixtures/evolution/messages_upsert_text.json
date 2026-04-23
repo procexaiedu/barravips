@@ -1,0 +1,17 @@
+{
+  "event": "messages.upsert",
+  "instance": "barra-vips-main",
+  "data": {
+    "key": {
+      "remoteJid": "5521999999999@s.whatsapp.net",
+      "fromMe": false,
+      "id": "MSG_TEXT_001"
+    },
+    "pushName": "Cliente Teste",
+    "messageType": "conversation",
+    "message": {
+      "conversation": "Oi, queria saber horario hoje"
+    },
+    "messageTimestamp": 1776805200
+  }
+}

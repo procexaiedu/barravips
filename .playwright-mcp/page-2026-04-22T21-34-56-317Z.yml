@@ -1,0 +1,181 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary "Navegacao operacional" [ref=e3]:
+      - link "BarraVips Operator" [ref=e4] [cursor=pointer]:
+        - /url: /dashboard
+        - text: BarraVips.operator
+      - navigation [ref=e5]:
+        - link "Dashboard" [ref=e6] [cursor=pointer]:
+          - /url: /dashboard
+        - link "Conversas" [ref=e7] [cursor=pointer]:
+          - /url: /conversas
+        - link "Handoffs" [ref=e8] [cursor=pointer]:
+          - /url: /handoffs
+        - link "Agenda" [ref=e9] [cursor=pointer]:
+          - /url: /agenda
+        - link "Midias" [ref=e10] [cursor=pointer]:
+          - /url: /midias
+        - link "Modelos" [ref=e11] [cursor=pointer]:
+          - /url: /modelos
+        - link "Status" [ref=e12] [cursor=pointer]:
+          - /url: /status
+    - main [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - paragraph [ref=e16]: Operacao
+          - heading "Dashboard" [level=1] [ref=e17]
+          - paragraph [ref=e18]: Numeros, filas e pendencias da operacao. Saude tecnica fica em /status.
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e40]:
+              - heading "KPIs operacionais" [level=2] [ref=e41]
+              - generic [ref=e42]:
+                - generic [ref=e43]: Atualizado 22/04/2026, 18:34
+                - button "Atualizar agora" [ref=e44] [cursor=pointer]
+            - generic [ref=e45]: "Resumo agregado indisponivel: Nao foi possivel conectar ao backend FastAPI.. Fallback abaixo usa amostras e envelopes carregados, sem converter erro em zero."
+            - generic [ref=e46]:
+              - 'link "Handoffs OPENED - Fallback: total por filtro; fonte /conversations" [ref=e47] [cursor=pointer]':
+                - /url: /handoffs
+                - generic [ref=e48]: Handoffs OPENED
+                - generic [ref=e49]: "-"
+                - generic [ref=e50]: "Fallback: total por filtro; fonte /conversations"
+              - 'link "Handoffs ACKNOWLEDGED - Fallback: total por filtro; fonte /conversations" [ref=e51] [cursor=pointer]':
+                - /url: /handoffs
+                - generic [ref=e52]: Handoffs ACKNOWLEDGED
+                - generic [ref=e53]: "-"
+                - generic [ref=e54]: "Fallback: total por filtro; fonte /conversations"
+              - 'link "Total de conversas - Fallback: total por envelope; fonte /conversations" [ref=e55] [cursor=pointer]':
+                - /url: /conversas
+                - generic [ref=e56]: Total de conversas
+                - generic [ref=e57]: "-"
+                - generic [ref=e58]: "Fallback: total por envelope; fonte /conversations"
+              - 'link "Ativas 24h - Fallback: amostra ate 100; fonte /conversations" [ref=e59] [cursor=pointer]':
+                - /url: /conversas
+                - generic [ref=e60]: Ativas 24h
+                - generic [ref=e61]: "-"
+                - generic [ref=e62]: "Fallback: amostra ate 100; fonte /conversations"
+              - 'link "Novas hoje - Sem fallback confiavel: /conversations nao expoe created_at" [ref=e63] [cursor=pointer]':
+                - /url: /conversas
+                - generic [ref=e64]: Novas hoje
+                - generic [ref=e65]: "-"
+                - generic [ref=e66]: "Sem fallback confiavel: /conversations nao expoe created_at"
+              - 'link "Flow UNDETERMINED - Fallback: amostra ate 100; fonte /conversations" [ref=e67] [cursor=pointer]':
+                - /url: /conversas
+                - generic [ref=e68]: Flow UNDETERMINED
+                - generic [ref=e69]: "-"
+                - generic [ref=e70]: "Fallback: amostra ate 100; fonte /conversations"
+              - 'link "State NEGOCIANDO - Fallback: amostra ate 100; fonte /conversations" [ref=e71] [cursor=pointer]':
+                - /url: /conversas
+                - generic [ref=e72]: State NEGOCIANDO
+                - generic [ref=e73]: "-"
+                - generic [ref=e74]: "Fallback: amostra ate 100; fonte /conversations"
+              - 'link "Slots proximos 14d - Fallback: janela 14d por envelope; fonte /schedule/slots" [ref=e75] [cursor=pointer]':
+                - /url: /agenda
+                - generic [ref=e76]: Slots proximos 14d
+                - generic [ref=e77]: "-"
+                - generic [ref=e78]: "Fallback: janela 14d por envelope; fonte /schedule/slots"
+              - 'link "Midias PENDING - Fallback: amostra ate 100; fonte /media" [ref=e79] [cursor=pointer]':
+                - /url: /midias
+                - generic [ref=e80]: Midias PENDING
+                - generic [ref=e81]: "-"
+                - generic [ref=e82]: "Fallback: amostra ate 100; fonte /media"
+            - generic [ref=e83]: "Fallback honesto: metricas exibidas usam amostras/envelopes carregados porque o resumo agregado nao esta disponivel."
+            - generic "Atalhos operacionais" [ref=e84]:
+              - link "Conversas" [ref=e85] [cursor=pointer]:
+                - /url: /conversas
+              - link "Handoffs" [ref=e86] [cursor=pointer]:
+                - /url: /handoffs
+              - link "Agenda" [ref=e87] [cursor=pointer]:
+                - /url: /agenda
+              - link "Midias" [ref=e88] [cursor=pointer]:
+                - /url: /midias
+              - link "Modelos" [ref=e89] [cursor=pointer]:
+                - /url: /modelos
+          - generic [ref=e90]:
+            - generic [ref=e91]:
+              - heading "Fila operacional de SLA" [level=2] [ref=e92]
+              - generic [ref=e93]: BFF
+            - generic [ref=e94]: Nao foi possivel conectar ao backend FastAPI.
+            - paragraph [ref=e95]: Fonte /api/dashboard/queues; janela por regra da fila; amostra informada por item quando houver resultado.
+          - generic [ref=e96]:
+            - generic [ref=e97]:
+              - heading "Atencao agora" [level=2] [ref=e98]
+              - generic [ref=e99]: Dados atuais do BFF
+            - generic [ref=e100]:
+              - region "Handoffs OPENED" [ref=e101]:
+                - generic [ref=e102]:
+                  - heading "Handoffs OPENED" [level=3] [ref=e103]
+                  - link "Drilldown" [ref=e104] [cursor=pointer]:
+                    - /url: /handoffs
+                - generic [ref=e105]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Handoffs ACKNOWLEDGED" [ref=e106]:
+                - generic [ref=e107]:
+                  - heading "Handoffs ACKNOWLEDGED" [level=3] [ref=e108]
+                  - link "Drilldown" [ref=e109] [cursor=pointer]:
+                    - /url: /handoffs
+                - generic [ref=e110]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Aguardando decisao" [ref=e111]:
+                - generic [ref=e112]:
+                  - heading "Aguardando decisao" [level=3] [ref=e113]
+                  - link "Drilldown" [ref=e114] [cursor=pointer]:
+                    - /url: /conversas
+                - generic [ref=e115]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Sem atividade" [ref=e116]:
+                - generic [ref=e117]:
+                  - heading "Sem atividade" [level=3] [ref=e118]
+                  - link "Drilldown" [ref=e119] [cursor=pointer]:
+                    - /url: /conversas
+                - generic [ref=e120]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Flow UNDETERMINED" [ref=e121]:
+                - generic [ref=e122]:
+                  - heading "Flow UNDETERMINED" [level=3] [ref=e123]
+                  - link "Drilldown" [ref=e124] [cursor=pointer]:
+                    - /url: /conversas
+                - generic [ref=e125]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Comprovantes em revisao" [ref=e126]:
+                - generic [ref=e127]:
+                  - heading "Comprovantes em revisao" [level=3] [ref=e128]
+                  - link "Drilldown" [ref=e129] [cursor=pointer]:
+                    - /url: /conversas
+                - generic [ref=e130]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Midias PENDING" [ref=e131]:
+                - generic [ref=e132]:
+                  - heading "Midias PENDING" [level=3] [ref=e133]
+                  - link "Drilldown" [ref=e134] [cursor=pointer]:
+                    - /url: /midias
+                - generic [ref=e135]: Nao foi possivel conectar ao backend FastAPI.
+              - region "Pendencias da modelo ativa" [ref=e136]:
+                - generic [ref=e137]:
+                  - heading "Pendencias da modelo ativa" [level=3] [ref=e138]
+                  - link "Drilldown" [ref=e139] [cursor=pointer]:
+                    - /url: /modelos
+                - generic [ref=e140]: Nao foi possivel conectar ao backend FastAPI.
+          - generic [ref=e141]:
+            - generic [ref=e142]:
+              - generic [ref=e143]:
+                - heading "Distribuicoes da amostra" [level=2] [ref=e144]
+                - generic [ref=e145]: Erro
+              - paragraph [ref=e146]: Nao foi possivel conectar ao backend FastAPI.
+            - generic [ref=e147]:
+              - generic [ref=e148]:
+                - heading "Resumo de handoffs" [level=2] [ref=e149]
+                - generic [ref=e150]: Erro
+              - paragraph [ref=e151]: Nao foi possivel conectar ao backend FastAPI.
+            - generic [ref=e152]:
+              - generic [ref=e153]:
+                - heading "Agenda proximos 14 dias" [level=2] [ref=e154]
+                - generic [ref=e155]: Erro
+              - paragraph [ref=e156]: Nao foi possivel conectar ao backend FastAPI.
+            - generic [ref=e157]:
+              - generic [ref=e158]:
+                - heading "Midias da amostra" [level=2] [ref=e159]
+                - generic [ref=e160]: Erro
+              - paragraph [ref=e161]: Nao foi possivel conectar ao backend FastAPI.
+            - generic [ref=e162]:
+              - generic [ref=e163]:
+                - heading "Pendencias da modelo ativa" [level=2] [ref=e164]
+                - generic [ref=e165]: Erro
+              - paragraph [ref=e166]: Nao foi possivel conectar ao backend FastAPI.
+  - button "Open Next.js Dev Tools" [ref=e167] [cursor=pointer]:
+    - img [ref=e168]
+  - alert [ref=e24]

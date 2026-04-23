@@ -1,0 +1,20 @@
+{
+  "event": "messages.upsert",
+  "instance": "barra-vips-main",
+  "data": {
+    "key": {
+      "remoteJid": "5521999999999@s.whatsapp.net",
+      "fromMe": false,
+      "id": "MSG_AUDIO_001"
+    },
+    "pushName": "Cliente Teste",
+    "messageType": "audioMessage",
+    "message": {
+      "audioMessage": {
+        "url": "https://example.invalid/media/audio-001.ogg",
+        "mimetype": "audio/ogg; codecs=opus"
+      }
+    },
+    "messageTimestamp": 1776805320
+  }
+}

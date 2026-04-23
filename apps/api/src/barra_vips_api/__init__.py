@@ -1,0 +1,1 @@
+"""Barra Vips operational API."""

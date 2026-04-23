@@ -1,0 +1,17 @@
+{
+  "event": "messages.upsert",
+  "instance": "barra-vips-main",
+  "data": {
+    "key": {
+      "remoteJid": "5521999999999@s.whatsapp.net",
+      "fromMe": true,
+      "id": "MSG_FROM_ME_001"
+    },
+    "pushName": "Modelo em cadastro",
+    "messageType": "conversation",
+    "message": {
+      "conversation": "Mensagem manual de exemplo"
+    },
+    "messageTimestamp": 1776805380
+  }
+}

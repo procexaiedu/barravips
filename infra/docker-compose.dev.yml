@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: barra-vips-postgres-dev
+    environment:
+      POSTGRES_USER: barra_vips
+      POSTGRES_PASSWORD: barra_vips_dev_password
+      POSTGRES_DB: barra_vips
+    ports:
+      - "5432:5432"
+    volumes:
+      - barra_vips_postgres_data:/var/lib/postgresql/data
+      - ../db:/workspace/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barra_vips -d barra_vips"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  barra_vips_postgres_data:

@@ -1,0 +1,75 @@
+- generic [ref=e2]:
+  - complementary "Navegacao operacional" [ref=e3]:
+    - link "BarraVips Operator" [ref=e4] [cursor=pointer]:
+      - /url: /dashboard
+      - text: BarraVips.operator
+    - navigation [ref=e5]:
+      - link "Dashboard" [ref=e6] [cursor=pointer]:
+        - /url: /dashboard
+      - link "Conversas" [ref=e7] [cursor=pointer]:
+        - /url: /conversas
+      - link "Handoffs" [ref=e8] [cursor=pointer]:
+        - /url: /handoffs
+      - link "Agenda" [ref=e9] [cursor=pointer]:
+        - /url: /agenda
+      - link "Midias" [ref=e10] [cursor=pointer]:
+        - /url: /midias
+      - link "Modelos" [ref=e11] [cursor=pointer]:
+        - /url: /modelos
+      - link "Status" [ref=e12] [cursor=pointer]:
+        - /url: /status
+  - main [ref=e13]:
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - paragraph [ref=e16]: Operacao
+        - heading "Midias" [level=1] [ref=e17]
+        - paragraph [ref=e18]: Upload, preview autenticado via BFF e ajuste de aprovacao/categoria minimo.
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]:
+            - heading "Resumo de uso" [level=2] [ref=e22]
+            - generic [ref=e23]: Atualizando
+          - paragraph [ref=e24]: Carregando resumo de curadoria.
+        - generic [ref=e25]:
+          - generic [ref=e26]:
+            - heading "Upload de midia" [level=2] [ref=e27]
+            - generic [ref=e28]: PENDING por padrao
+          - form "Upload de midia" [ref=e29]:
+            - generic [ref=e30]:
+              - generic [ref=e31]: Arquivo
+              - button "Arquivo" [ref=e32]
+            - generic [ref=e33]:
+              - generic [ref=e34]: Categoria (opcional)
+              - textbox "Categoria (opcional)" [ref=e35]:
+                - /placeholder: "Ex.: rosto, ambiente"
+            - generic [ref=e36]:
+              - generic [ref=e37]: Approval status inicial
+              - combobox "Approval status inicial" [ref=e38]:
+                - option "PENDING" [selected]
+                - option "APPROVED"
+                - option "REJECTED"
+                - option "REVOKED"
+            - button "Enviar" [ref=e41] [cursor=pointer]
+        - generic [ref=e42]:
+          - generic [ref=e43]:
+            - heading "Catalogo de midias" [level=2] [ref=e44]
+            - generic [ref=e45]: 0 total
+          - form "Filtros de midia" [ref=e46]:
+            - generic [ref=e47]:
+              - generic [ref=e48]: Tipo
+              - combobox "Tipo" [ref=e49]:
+                - option "Todos" [selected]
+                - option "image"
+                - option "audio"
+                - option "video"
+                - option "document"
+            - generic [ref=e50]:
+              - generic [ref=e51]: Approval
+              - combobox "Approval" [ref=e52]:
+                - option "Todos" [selected]
+                - option "PENDING"
+                - option "APPROVED"
+                - option "REJECTED"
+                - option "REVOKED"
+            - button "Aplicar" [ref=e55] [cursor=pointer]
+          - paragraph [ref=e56]: Sem midias para os filtros aplicados.

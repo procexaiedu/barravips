@@ -1,0 +1,21 @@
+{
+  "event": "messages.upsert",
+  "instance": "barra-vips-main",
+  "data": {
+    "key": {
+      "remoteJid": "5521999999999@s.whatsapp.net",
+      "fromMe": false,
+      "id": "MSG_IMAGE_001"
+    },
+    "pushName": "Cliente Teste",
+    "messageType": "imageMessage",
+    "message": {
+      "imageMessage": {
+        "url": "https://example.invalid/media/image-001.jpg",
+        "mimetype": "image/jpeg",
+        "caption": "Comprovante enviado para teste"
+      }
+    },
+    "messageTimestamp": 1776805260
+  }
+}

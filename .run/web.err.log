@@ -1,0 +1,220 @@
+⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+Cross-origin access to Next.js dev resources is blocked by default for safety.
+
+To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+
+// next.config.js
+module.exports = {
+  allowedDevOrigins: ['127.0.0.1'],
+}
+
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}
+[browser] Uncaught ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src/features/dashboard/dashboard-client.tsx:194:21)
+    at DashboardPage (app\(operator)\dashboard\page.tsx:11:7)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return (
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+⨯ ReferenceError: detectBffOutage is not defined
+    at DashboardClient (src\features\dashboard\dashboard-client.tsx:194:21)
+  192 |   const summaryError = state.errors.summary;
+  193 |   const hasAgentFailure = (state.agentOps?.failed_or_partial.value ?? 0) > 0;
+> 194 |   const bffOutage = detectBffOutage(state.errors);
+      |                     ^
+  195 |
+  196 |   if (firstLoad) {
+  197 |     return ( {
+  digest: '674653015'
+}

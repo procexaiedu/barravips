@@ -1,0 +1,9 @@
+{
+  "event": "connection.update",
+  "instance": "barra-vips-main",
+  "data": {
+    "state": "close",
+    "status": "DISCONNECTED",
+    "reason": "fixture-only"
+  }
+}
