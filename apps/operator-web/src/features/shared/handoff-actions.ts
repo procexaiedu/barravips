@@ -27,8 +27,8 @@ export function handoffActionMessage(
 ): string {
   if (status === 409) {
     return action === "acknowledge"
-      ? "Esta transferência já não está mais pendente. Atualize a conversa."
-      : "A IA já voltou ao atendimento ou a conversa não está transferida.";
+      ? "Este atendimento humano já não está mais pendente. Atualize a conversa."
+      : "A IA já voltou ao atendimento ou a conversa não está em atendimento humano.";
   }
   if (status === 404) {
     return "Conversa não encontrada.";

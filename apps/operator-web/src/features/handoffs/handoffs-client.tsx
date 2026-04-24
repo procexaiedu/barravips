@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   ConversationRead,
   HandoffSummaryRead,
   PaginatedEnvelope,
+  UrgencyProfile,
 } from "@/contracts";
 import { bffFetch, type BffFetchError } from "@/features/shared/bff-client";
 import { ConfirmModal } from "@/features/shared/confirm-modal";
@@ -21,11 +22,31 @@ import {
   conversationStateLabel,
   flowTypeLabel,
   handoffReasonLabel,
+  handoffStatusLabel,
   urgencyProfileLabel,
 } from "@/features/shared/labels";
 
 const POLL_INTERVAL_MS = 10_000;
 const PAGE_SIZE = 50;
+const SLA_MINUTES = 30;
+const SLA_ATTENTION_MINUTES = 20;
+
+type SlaGroupKey = "overdue" | "attention" | "within";
+
+type ListFilters = {
+  urgencyProfile: "" | UrgencyProfile;
+  q: string;
+  minAmount: string;
+  maxAmount: string;
+};
+
+function parseAmountInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed.replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
 
 type Loaded = {
   summary: HandoffSummaryRead | null;
@@ -38,6 +59,17 @@ type Loaded = {
   };
 };
 
+type PendingRelease = {
+  conversation: ConversationRead;
+};
+
+const EMPTY_FILTERS: ListFilters = {
+  urgencyProfile: "",
+  q: "",
+  minAmount: "",
+  maxAmount: "",
+};
+
 const INITIAL: Loaded = {
   summary: null,
   opened: null,
@@ -45,9 +77,30 @@ const INITIAL: Loaded = {
   errors: { summary: null, opened: null, acknowledged: null },
 };
 
-type PendingRelease = {
-  conversation: ConversationRead;
-};
+const SLA_GROUPS: Array<{ key: SlaGroupKey; title: string; description: string }> = [
+  {
+    key: "overdue",
+    title: "Atrasados",
+    description: "Passaram do tempo ideal de resposta humana.",
+  },
+  {
+    key: "attention",
+    title: "Atenção",
+    description: "Estão perto do SLA. Assuma antes de virar atraso.",
+  },
+  {
+    key: "within",
+    title: "Dentro do prazo",
+    description: "Ainda dentro da janela operacional.",
+  },
+];
+
+const URGENCY_PROFILE_OPTIONS: UrgencyProfile[] = [
+  "IMMEDIATE",
+  "SCHEDULED",
+  "UNDEFINED_TIME",
+  "ESTIMATED_TIME",
+];
 
 export function HandoffsClient() {
   const [loaded, setLoaded] = useState<Loaded>(INITIAL);
@@ -55,33 +108,53 @@ export function HandoffsClient() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [action, setAction] = useState<string | null>(null);
   const [pendingRelease, setPendingRelease] = useState<PendingRelease | null>(null);
+  const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (active: ListFilters) => {
+    const min = parseAmountInput(active.minAmount);
+    const max = parseAmountInput(active.maxAmount);
+    const amountSuffix = buildAmountQuery(min, max);
     const [summary, opened, acknowledged] = await Promise.all([
       bffFetch<HandoffSummaryRead>("/api/operator/handoffs/summary?window=7d"),
       bffFetch<PaginatedEnvelope<ConversationRead>>(
-        `/api/operator/conversations?handoff_status=OPENED&page_size=${PAGE_SIZE}`,
+        `/api/operator/conversations?handoff_status=OPENED&page_size=${PAGE_SIZE}${amountSuffix}`,
       ),
       bffFetch<PaginatedEnvelope<ConversationRead>>(
-        `/api/operator/conversations?handoff_status=ACKNOWLEDGED&page_size=${PAGE_SIZE}`,
+        `/api/operator/conversations?handoff_status=ACKNOWLEDGED&page_size=${PAGE_SIZE}${amountSuffix}`,
       ),
     ]);
     setLoaded({
       summary: summary.data,
       opened: opened.data,
       acknowledged: acknowledged.data,
-      errors: { summary: summary.error, opened: opened.error, acknowledged: acknowledged.error },
+      errors: {
+        summary: summary.error,
+        opened: opened.error,
+        acknowledged: acknowledged.error,
+      },
     });
     setFirstLoad(false);
   }, []);
 
+  const amountRangeError = useMemo(() => {
+    const min = parseAmountInput(filters.minAmount);
+    const max = parseAmountInput(filters.maxAmount);
+    if (min !== null && max !== null && min > max) {
+      return "O valor mínimo não pode ser maior que o máximo.";
+    }
+    return null;
+  }, [filters.minAmount, filters.maxAmount]);
+
   useEffect(() => {
-    void load();
+    if (amountRangeError) {
+      return;
+    }
+    void load(filters);
     const id = window.setInterval(() => {
-      void load();
+      void load(filters);
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
-  }, [load]);
+  }, [amountRangeError, filters, load]);
 
   const onAcknowledge = useCallback(
     async (conversation: ConversationRead) => {
@@ -92,11 +165,11 @@ export function HandoffsClient() {
       if (result.error) {
         setAction(handoffActionMessage("acknowledge", result.error.status));
       } else {
-        setAction(`Você assumiu a conversa de ${conversation.client.display_name || conversation.client.whatsapp_jid}.`);
+        setAction(`Você assumiu ${leadName(conversation)}. Responda o lead antes de devolver para a IA.`);
       }
-      await load();
+      await load(filters);
     },
-    [load],
+    [filters, load],
   );
 
   const onConfirmRelease = useCallback(async () => {
@@ -112,16 +185,37 @@ export function HandoffsClient() {
     if (result.error) {
       setAction(handoffActionMessage("release", result.error.status));
     } else {
-      setAction(`Conversa de ${conversation.client.display_name || conversation.client.whatsapp_jid} devolvida para a IA.`);
+      setAction(`${leadName(conversation)} voltou para atendimento da IA.`);
     }
-    await load();
-  }, [load, pendingRelease]);
+    await load(filters);
+  }, [filters, load, pendingRelease]);
+
+  const waitingLeads = useMemo(
+    () => applyFilters(loaded.opened?.items ?? [], filters).sort(compareSlaPriority),
+    [filters, loaded.opened],
+  );
+
+  const activeLeads = useMemo(
+    () => applyFilters(loaded.acknowledged?.items ?? [], filters).sort(compareSlaPriority),
+    [filters, loaded.acknowledged],
+  );
+
+  const grouped = useMemo(() => groupBySla(waitingLeads), [waitingLeads]);
+  const filtersActive = Boolean(
+    filters.q.trim() ||
+      filters.urgencyProfile ||
+      filters.minAmount.trim() ||
+      filters.maxAmount.trim(),
+  );
+  const overdueCount = grouped.overdue.length;
+  const attentionCount = grouped.attention.length;
+  const nextLead = waitingLeads[0] ?? null;
 
   if (firstLoad) {
     return (
       <div className="panel" role="status">
         <div className="panel-heading">
-          <h2>Carregando transferências</h2>
+          <h2>Carregando leads para assumir</h2>
           <span className="badge muted">Buscando</span>
         </div>
       </div>
@@ -131,75 +225,84 @@ export function HandoffsClient() {
   return (
     <div className="section-stack">
       {action ? <div className="panel-notice warning">{action}</div> : null}
-      <HandoffSummaryPanel summary={loaded.summary} error={loaded.errors.summary} />
-      <HandoffSection
-        title="Aguardando a modelo"
-        tone="danger"
-        envelope={loaded.opened}
-        error={loaded.errors.opened}
-        emptyMessage="Nenhum cliente esperando a modelo assumir agora."
-        actions={(conversation) => (
-          <>
-            <button
-              className="button"
-              type="button"
-              disabled={busyId === conversation.id}
-              onClick={() => void onAcknowledge(conversation)}
-            >
-              Assumi
-            </button>
-            <button
-              className="button danger"
-              type="button"
-              disabled={busyId === conversation.id}
-              onClick={() => setPendingRelease({ conversation })}
-            >
-              Devolver para IA
-            </button>
-          </>
-        )}
+
+      <section className="handoff-command">
+        <div className="handoff-command-copy">
+          <p className="eyebrow">Fila operacional</p>
+          <h2>Leads para assumir</h2>
+          <p>Leads que a IA encaminhou para atendimento humano, ordenados por SLA e urgência.</p>
+        </div>
+        <div className="handoff-command-metrics">
+          <QueueMetric label="Aguardando humano" value={loaded.opened?.total ?? 0} tone={overdueCount > 0 ? "danger" : "default"} />
+          <QueueMetric label="Atrasados" value={overdueCount} tone={overdueCount > 0 ? "danger" : "default"} />
+          <QueueMetric label="Atenção" value={attentionCount} tone={attentionCount > 0 ? "warning" : "default"} />
+          <QueueMetric
+            label="Próximo SLA"
+            value={nextLead ? slaClockLabel(nextLead) : "-"}
+            tone={nextLead && slaGroupFor(nextLead) !== "within" ? "warning" : "default"}
+          />
+        </div>
+      </section>
+
+      <HandoffFilters
+        filters={filters}
+        totalLoaded={(loaded.opened?.items.length ?? 0) + (loaded.acknowledged?.items.length ?? 0)}
+        totalAfter={waitingLeads.length + activeLeads.length}
+        amountRangeError={amountRangeError}
+        onChange={setFilters}
+        onReset={() => setFilters(EMPTY_FILTERS)}
       />
-      <HandoffSection
-        title="A modelo já assumiu"
-        tone="warning"
-        envelope={loaded.acknowledged}
+
+      {loaded.errors.opened ? <div className="panel-notice">{loaded.errors.opened.message}</div> : null}
+      {loaded.errors.summary ? <div className="panel-notice">{loaded.errors.summary.message}</div> : null}
+
+      {waitingLeads.length === 0 ? (
+        <HandoffEmptyState filtersActive={filtersActive} onReset={() => setFilters(EMPTY_FILTERS)} />
+      ) : (
+        <div className="sla-board">
+          {SLA_GROUPS.map((group) => (
+            <SlaGroup
+              key={group.key}
+              title={group.title}
+              description={group.description}
+              groupKey={group.key}
+              items={grouped[group.key]}
+              busyId={busyId}
+              onAcknowledge={onAcknowledge}
+            />
+          ))}
+        </div>
+      )}
+
+      <ActiveHumanSection
+        items={activeLeads}
+        total={loaded.acknowledged?.total ?? 0}
         error={loaded.errors.acknowledged}
-        emptyMessage="Nenhuma conversa sendo atendida pela modelo agora."
-        actions={(conversation) => (
-          <button
-            className="button danger"
-            type="button"
-            disabled={busyId === conversation.id}
-            onClick={() => setPendingRelease({ conversation })}
-          >
-            Devolver para IA
-          </button>
-        )}
+        busyId={busyId}
+        filtersActive={filtersActive}
+        onRelease={(conversation) => setPendingRelease({ conversation })}
       />
+
+      <SummaryPanel summary={loaded.summary} />
 
       {pendingRelease ? (
         <ConfirmModal
-          title="Devolver conversa para a IA"
+          title="Devolver lead para a IA"
           description={
             <div className="stack-sm">
-              <p>A IA vai voltar a responder esta conversa automaticamente. Confirma?</p>
+              <p>A IA volta a responder automaticamente. Confirma que o atendimento humano terminou?</p>
               <dl className="kv-list">
                 <div>
-                  <dt>Cliente</dt>
-                  <dd>
-                    {pendingRelease.conversation.client.display_name ||
-                      pendingRelease.conversation.client.whatsapp_jid}
-                  </dd>
+                  <dt>Lead</dt>
+                  <dd>{leadName(pendingRelease.conversation)}</dd>
                 </div>
                 <div>
-                  <dt>Situação</dt>
+                  <dt>Etapa</dt>
                   <dd>{conversationStateLabel(pendingRelease.conversation.state)}</dd>
                 </div>
                 <div>
                   <dt>Última mensagem</dt>
-                  <dd>
-                    {pendingRelease.conversation.last_message?.content_preview || "-"}
-                  </dd>
+                  <dd>{pendingRelease.conversation.last_message?.content_preview || "-"}</dd>
                 </div>
               </dl>
             </div>
@@ -215,213 +318,495 @@ export function HandoffsClient() {
   );
 }
 
-function HandoffSummaryPanel({
-  summary,
-  error,
+function HandoffFilters({
+  filters,
+  totalLoaded,
+  totalAfter,
+  amountRangeError,
+  onChange,
+  onReset,
 }: {
-  summary: HandoffSummaryRead | null;
-  error: BffFetchError | null;
+  filters: ListFilters;
+  totalLoaded: number;
+  totalAfter: number;
+  amountRangeError: string | null;
+  onChange: (next: ListFilters) => void;
+  onReset: () => void;
 }) {
-  if (error) {
-    return (
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Resumo da semana</h2>
-          <span className="badge danger">Erro</span>
-        </div>
-        <p>{error.message}</p>
-      </section>
-    );
-  }
-  if (!summary) {
-    return (
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Resumo da semana</h2>
-          <span className="badge muted">Sem dados</span>
-        </div>
-        <p className="empty-state">Não conseguimos montar o resumo de transferências agora.</p>
-      </section>
-    );
-  }
-
+  const active = Boolean(
+    filters.q.trim() ||
+      filters.urgencyProfile ||
+      filters.minAmount.trim() ||
+      filters.maxAmount.trim(),
+  );
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>Resumo dos últimos 7 dias</h2>
+    <section className="panel compact-panel">
+      <div className="panel-heading compact">
+        <h2>Busca rápida</h2>
+        <span className="badge muted">
+          {active ? `${formatNumber(totalAfter)} de ${formatNumber(totalLoaded)}` : `${formatNumber(totalLoaded)} carregados`}
+        </span>
       </div>
-      <div className="metric-grid">
-        <SummaryMetric label="Aguardando modelo" value={summary.current_by_status.counts.OPENED ?? 0} />
-        <SummaryMetric label="Modelo atendendo" value={summary.current_by_status.counts.ACKNOWLEDGED ?? 0} />
-        <SummaryMetric label="Já devolvidas" value={summary.current_by_status.counts.RELEASED ?? 0} />
-        <SummaryMetric label="Esperando há 4h+" value={summary.open_age_buckets.counts["4h+"] ?? 0} />
-        <SummaryMetric
-          label="Tempo médio até assumir"
-          value={formatDurationSeconds(summary.time_to_acknowledge?.average_seconds)}
-        />
-        <SummaryMetric
-          label="Tempo médio até devolver"
-          value={formatDurationSeconds(summary.time_to_release?.average_seconds)}
-        />
-      </div>
-      <div className="dashboard-columns">
-        <table className="data-table" aria-label="Quanto tempo cada transferência está esperando">
-          <thead>
-            <tr>
-              <th>Esperando há</th>
-              <th className="numeric">Conversas</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(summary.open_age_buckets.counts).map(([bucket, value]) => (
-              <tr key={bucket}>
-                <td>{bucket}</td>
-                <td className={bucket === "4h+" && value > 0 ? "numeric warning-cell" : "numeric"}>
-                  {formatNumber(value)}
-                </td>
-              </tr>
+      <div className="handoff-filter-row" aria-label="Filtros de leads para assumir">
+        <label className="search-field">
+          <span className="visually-hidden">Buscar lead</span>
+          <input
+            type="search"
+            value={filters.q}
+            onChange={(event) => onChange({ ...filters, q: event.target.value })}
+            placeholder="Buscar lead, motivo, telefone ou resumo"
+          />
+        </label>
+        <label>
+          <span>Urgência</span>
+          <select
+            value={filters.urgencyProfile}
+            onChange={(event) =>
+              onChange({ ...filters, urgencyProfile: event.target.value as ListFilters["urgencyProfile"] })
+            }
+          >
+            <option value="">Todas</option>
+            {URGENCY_PROFILE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {urgencyProfileLabel(option)}
+              </option>
             ))}
-          </tbody>
-        </table>
-        <table className="data-table" aria-label="Por que a IA transferiu">
-          <thead>
-            <tr>
-              <th>Motivo</th>
-              <th className="numeric">Vezes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(summary.reasons.counts).length === 0 ? (
-              <tr>
-                <td colSpan={2} className="muted-cell">Nenhum motivo registrado na semana.</td>
-              </tr>
-            ) : (
-              Object.entries(summary.reasons.counts).map(([reason, value]) => (
-                <tr key={reason}>
-                  <td>{handoffReasonLabel(reason) || reason}</td>
-                  <td className="numeric">{formatNumber(value)}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+          </select>
+        </label>
+        <label>
+          <span>Valor mínimo (R$)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={filters.minAmount}
+            onChange={(event) => onChange({ ...filters, minAmount: event.target.value })}
+            placeholder="0,00"
+          />
+        </label>
+        <label>
+          <span>Valor máximo (R$)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={filters.maxAmount}
+            onChange={(event) => onChange({ ...filters, maxAmount: event.target.value })}
+            placeholder="0,00"
+          />
+        </label>
+        <button className="button secondary" type="button" onClick={onReset} disabled={!active}>
+          Limpar filtros
+        </button>
       </div>
+      {amountRangeError ? (
+        <div className="panel-notice warning" role="alert">
+          {amountRangeError}
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function SummaryMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: number | string;
-}) {
-  return (
-    <div className="metric">
-      <span className="metric-label">{label}</span>
-      <span className="metric-value">
-        {typeof value === "number" ? formatNumber(value) : value}
-      </span>
-    </div>
-  );
+function buildAmountQuery(min: number | null, max: number | null): string {
+  const parts: string[] = [];
+  if (min !== null) parts.push(`min_amount=${encodeURIComponent(String(min))}`);
+  if (max !== null) parts.push(`max_amount=${encodeURIComponent(String(max))}`);
+  return parts.length ? `&${parts.join("&")}` : "";
 }
 
-function HandoffSection({
+function SlaGroup({
   title,
-  tone,
-  envelope,
-  error,
-  emptyMessage,
-  actions,
+  description,
+  groupKey,
+  items,
+  busyId,
+  onAcknowledge,
 }: {
   title: string;
-  tone: "danger" | "warning";
-  envelope: PaginatedEnvelope<ConversationRead> | null;
-  error: BffFetchError | null;
-  emptyMessage: string;
-  actions: (conversation: ConversationRead) => React.ReactNode;
+  description: string;
+  groupKey: SlaGroupKey;
+  items: ConversationRead[];
+  busyId: string | null;
+  onAcknowledge: (conversation: ConversationRead) => Promise<void>;
 }) {
-  const items = envelope?.items ?? [];
   return (
-    <section className="panel">
-      <div className="panel-heading">
-        <h2>{title}</h2>
-        <span className={`badge ${tone === "danger" ? "danger" : "warning"}`}>
-          {envelope?.total ?? 0}
+    <section className={`sla-column ${groupKey}`}>
+      <div className="sla-column-header">
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+        <span className={groupKey === "overdue" ? "badge danger" : groupKey === "attention" ? "badge warning" : "badge muted"}>
+          {items.length}
         </span>
       </div>
-      {error ? <div className="panel-notice">{error.message}</div> : null}
       {items.length === 0 ? (
-        <p className="empty-state">{emptyMessage}</p>
+        <p className="empty-state">{emptySlaText(groupKey)}</p>
       ) : (
-        <table className="data-table" aria-label={title}>
-          <thead>
-            <tr>
-              <th>Cliente</th>
-              <th>WhatsApp</th>
-              <th>Situação</th>
-              <th>Tipo de atendimento</th>
-              <th>Última mensagem</th>
-              <th className="numeric">Esperando há</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => (
-              <tr key={c.id}>
-                <td>
-                  <Link className="link-pill" href={`/conversas/${c.id}`}>
-                    {c.client.display_name || c.client.whatsapp_jid}
-                  </Link>
-                </td>
-                <td className="muted-cell">{c.client.whatsapp_jid}</td>
-                <td>
-                  <span className="chip">{conversationStateLabel(c.state)}</span>
-                  {c.awaiting_client_decision ? (
-                    <span className="chip warning">aguarda resposta</span>
-                  ) : null}
-                </td>
-                <td>
-                  <span className={c.flow_type === "EXTERNAL" ? "chip warning" : "chip"}>
-                    {flowTypeLabel(c.flow_type)}
-                  </span>
-                  {urgencyProfileLabel(c.urgency_profile) ? (
-                    <span className="chip warning">{urgencyProfileLabel(c.urgency_profile)}</span>
-                  ) : null}
-                </td>
-                <td className="muted-cell">
-                  {c.last_message?.content_preview || c.summary || "-"}
-                  <div style={{ marginTop: 6 }}>
-                    {clientStatusLabel(c.client.client_status) ? (
-                      <span className="chip">cliente {clientStatusLabel(c.client.client_status)}</span>
-                    ) : null}
-                    {c.client.language_hint ? <span className="chip">idioma {c.client.language_hint}</span> : null}
-                    {c.expected_amount ? (
-                      <span className="chip">valor combinado {formatCurrency(c.expected_amount)}</span>
-                    ) : null}
-                  </div>
-                </td>
-                <td className="numeric muted-cell">
-                  <span title={formatDateTime(c.last_handoff_at ?? c.last_message_at)}>
-                    {formatRelativeSeconds(c.last_handoff_at ?? c.last_message_at)}
-                  </span>
-                </td>
-                <td>
-                  <div className="inline-actions">{actions(c)}</div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="handoff-card-list">
+          {items.map((conversation) => (
+            <HandoffCard
+              key={conversation.id}
+              conversation={conversation}
+              busy={busyId === conversation.id}
+              onAcknowledge={() => void onAcknowledge(conversation)}
+            />
+          ))}
+        </div>
       )}
     </section>
   );
 }
 
+function HandoffCard({
+  conversation,
+  busy,
+  onAcknowledge,
+}: {
+  conversation: ConversationRead;
+  busy: boolean;
+  onAcknowledge: () => void;
+}) {
+  const group = slaGroupFor(conversation);
+  const reason = handoffReasonGuess(conversation);
+  const summary = conversation.summary || conversation.last_message?.content_preview || "Sem resumo registrado para esta conversa.";
+
+  return (
+    <article className={`handoff-card ${group}`}>
+      <header>
+        <div>
+          <h3>{leadName(conversation)}</h3>
+          <p>{conversation.client.whatsapp_jid}</p>
+        </div>
+        <SlaBadge conversation={conversation} />
+      </header>
+
+      <div className="handoff-card-reason">
+        <span>Motivo</span>
+        <strong>{reason}</strong>
+      </div>
+
+      <p className="handoff-summary">{truncate(summary, 150)}</p>
+
+      <dl className="handoff-facts">
+        <div>
+          <dt>Urgência</dt>
+          <dd><UrgencyBadge conversation={conversation} /></dd>
+        </div>
+        <div>
+          <dt>SLA</dt>
+          <dd>{slaClockLabel(conversation)}</dd>
+        </div>
+        <div>
+          <dt>Esperando</dt>
+          <dd>{formatRelativeSeconds(handoffStartedAt(conversation))}</dd>
+        </div>
+        <div>
+          <dt>Etapa</dt>
+          <dd>{conversationStateLabel(conversation.state)}</dd>
+        </div>
+      </dl>
+
+      <div className="handoff-card-chips">
+        <span className="chip">{flowTypeLabel(conversation.flow_type)}</span>
+        {conversation.expected_amount ? <span className="chip gold">{formatCurrency(conversation.expected_amount)}</span> : null}
+        {conversation.client.client_status ? <span className="chip">{clientStatusLabel(conversation.client.client_status)}</span> : null}
+      </div>
+
+      <div className="handoff-card-actions">
+        <button className="button handoff-primary" type="button" disabled={busy} onClick={onAcknowledge}>
+          Assumir agora
+        </button>
+        <Link className="button secondary" href={`/conversas/${conversation.id}`}>
+          Ver conversa
+        </Link>
+      </div>
+    </article>
+  );
+}
+
+function ActiveHumanSection({
+  items,
+  total,
+  error,
+  busyId,
+  filtersActive,
+  onRelease,
+}: {
+  items: ConversationRead[];
+  total: number;
+  error: BffFetchError | null;
+  busyId: string | null;
+  filtersActive: boolean;
+  onRelease: (conversation: ConversationRead) => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Em atendimento humano</h2>
+          <p className="section-subtitle">Leads já assumidos que ainda não voltaram para a IA.</p>
+        </div>
+        <span className="badge warning">{formatNumber(total)}</span>
+      </div>
+      {error ? <div className="panel-notice">{error.message}</div> : null}
+      {items.length === 0 ? (
+        <p className="empty-state">
+          {filtersActive
+            ? "Nenhum atendimento humano bate com os filtros."
+            : "Nenhum lead está em atendimento humano agora."}
+        </p>
+      ) : (
+        <div className="active-handoff-list">
+          {items.map((conversation) => (
+            <article className="active-handoff-item" key={conversation.id}>
+              <div>
+                <h3>{leadName(conversation)}</h3>
+                <p>{truncate(conversation.summary || conversation.last_message?.content_preview || "-", 120)}</p>
+                <div className="handoff-card-chips">
+                  <span className="chip warning">{handoffStatusLabel(conversation.handoff_status)}</span>
+                  <span className="chip">{conversationStateLabel(conversation.state)}</span>
+                  <span className="chip">há {formatRelativeSeconds(handoffStartedAt(conversation))}</span>
+                </div>
+              </div>
+              <div className="inline-actions">
+                <Link className="button secondary" href={`/conversas/${conversation.id}`}>
+                  Ver conversa
+                </Link>
+                <button
+                  className="button danger"
+                  type="button"
+                  disabled={busyId === conversation.id}
+                  onClick={() => onRelease(conversation)}
+                >
+                  Devolver para IA
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function HandoffEmptyState({
+  filtersActive,
+  onReset,
+}: {
+  filtersActive: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <div className="empty-state-card">
+      <span className="empty-state-icon" aria-hidden="true" />
+      <div className="empty-state-copy">
+        <strong>{filtersActive ? "Nenhum lead encontrado" : "Nenhum lead aguardando atendimento humano"}</strong>
+        <p>
+          {filtersActive
+            ? "Tente remover filtros ou buscar por outro nome, telefone, motivo ou resumo."
+            : "Quando a IA transferir uma conversa para atendimento humano, ela aparecerá nesta fila com motivo, urgência e SLA."}
+        </p>
+      </div>
+      {filtersActive ? (
+        <button className="button secondary empty-state-action" type="button" onClick={onReset}>
+          Limpar filtros
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryPanel({ summary }: { summary: HandoffSummaryRead | null }) {
+  if (!summary) {
+    return null;
+  }
+  const reasons = Object.entries(summary.reasons.counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+
+  return (
+    <details className="analytics-accordion">
+      <summary>Resumo dos handoffs nos últimos 7 dias</summary>
+      <div className="performance-strip analytics-grid">
+        <QueueMetric label="Abertos" value={summary.current_by_status.counts.OPENED ?? 0} tone="default" />
+        <QueueMetric label="Assumidos" value={summary.current_by_status.counts.ACKNOWLEDGED ?? 0} tone="default" />
+        <QueueMetric label="4h+" value={summary.open_age_buckets.counts["4h+"] ?? 0} tone="warning" />
+        <QueueMetric label="Tempo médio" value={formatDurationSeconds(summary.time_to_acknowledge?.average_seconds)} tone="default" />
+      </div>
+      {reasons.length > 0 ? (
+        <div className="handoff-reason-strip">
+          {reasons.map(([reason, value]) => (
+            <span className="chip" key={reason}>
+              {handoffReasonLabel(reason) || reason}: {formatNumber(value)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
+function QueueMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  tone: "default" | "warning" | "danger";
+}) {
+  return (
+    <div className={`metric compact ${tone === "default" ? "" : tone}`}>
+      <span className="metric-label">{label}</span>
+      <span className="metric-value">{typeof value === "number" ? formatNumber(value) : value}</span>
+    </div>
+  );
+}
+
+function SlaBadge({ conversation }: { conversation: ConversationRead }) {
+  const group = slaGroupFor(conversation);
+  if (group === "overdue") {
+    return <span className="badge danger">Atrasado</span>;
+  }
+  if (group === "attention") {
+    return <span className="badge warning">Atenção</span>;
+  }
+  return <span className="badge ok">No prazo</span>;
+}
+
+function UrgencyBadge({ conversation }: { conversation: ConversationRead }) {
+  if (conversation.urgency_profile === "IMMEDIATE") {
+    return <span className="chip danger">Alta</span>;
+  }
+  if (conversation.urgency_profile === "SCHEDULED" || conversation.urgency_profile === "ESTIMATED_TIME") {
+    return <span className="chip warning">Média</span>;
+  }
+  return <span className="chip">Baixa</span>;
+}
+
+function applyFilters(items: ConversationRead[], filters: ListFilters): ConversationRead[] {
+  const query = filters.q.trim().toLowerCase();
+  return items.filter((conversation) => {
+    if (filters.urgencyProfile && conversation.urgency_profile !== filters.urgencyProfile) {
+      return false;
+    }
+    if (query) {
+      const haystack = [
+        leadName(conversation),
+        conversation.client.whatsapp_jid,
+        conversation.summary,
+        conversation.last_message?.content_preview,
+        handoffReasonGuess(conversation),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(query)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function groupBySla(items: ConversationRead[]): Record<SlaGroupKey, ConversationRead[]> {
+  return {
+    overdue: items.filter((item) => slaGroupFor(item) === "overdue"),
+    attention: items.filter((item) => slaGroupFor(item) === "attention"),
+    within: items.filter((item) => slaGroupFor(item) === "within"),
+  };
+}
+
+function compareSlaPriority(a: ConversationRead, b: ConversationRead): number {
+  return slaPriority(b) - slaPriority(a) || ageMinutes(b) - ageMinutes(a);
+}
+
+function slaPriority(conversation: ConversationRead): number {
+  let score = 0;
+  if (slaGroupFor(conversation) === "overdue") score += 100;
+  if (slaGroupFor(conversation) === "attention") score += 50;
+  if (conversation.urgency_profile === "IMMEDIATE") score += 25;
+  if (conversation.expected_amount) score += 10;
+  return score;
+}
+
+function slaGroupFor(conversation: ConversationRead): SlaGroupKey {
+  const minutes = ageMinutes(conversation);
+  if (minutes >= SLA_MINUTES) {
+    return "overdue";
+  }
+  if (minutes >= SLA_ATTENTION_MINUTES) {
+    return "attention";
+  }
+  return "within";
+}
+
+function slaClockLabel(conversation: ConversationRead): string {
+  const minutes = ageMinutes(conversation);
+  if (minutes >= SLA_MINUTES) {
+    return `atrasado há ${Math.floor(minutes - SLA_MINUTES)}m`;
+  }
+  return `vence em ${Math.max(0, Math.ceil(SLA_MINUTES - minutes))}m`;
+}
+
+function ageMinutes(conversation: ConversationRead): number {
+  const startedAt = handoffStartedAt(conversation);
+  if (!startedAt) {
+    return 0;
+  }
+  const timestamp = new Date(startedAt).getTime();
+  if (Number.isNaN(timestamp)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+}
+
+function handoffStartedAt(conversation: ConversationRead): string | null {
+  return conversation.last_handoff_at ?? conversation.last_message_at;
+}
+
+function handoffReasonGuess(conversation: ConversationRead): string {
+  if (conversation.flow_type === "EXTERNAL") {
+    return handoffReasonLabel("external_flow") ?? "Atendimento com deslocamento";
+  }
+  if (conversation.expected_amount) {
+    return handoffReasonLabel("pricing") ?? "Negociação de valor";
+  }
+  if (conversation.awaiting_client_decision) {
+    return "Lead pediu decisão ou confirmação humana";
+  }
+  if (conversation.urgency_profile === "IMMEDIATE") {
+    return "Urgência imediata detectada";
+  }
+  return "A IA pediu intervenção humana";
+}
+
+function leadName(conversation: ConversationRead): string {
+  return conversation.client.display_name || conversation.client.whatsapp_jid;
+}
+
+function emptySlaText(groupKey: SlaGroupKey): string {
+  if (groupKey === "overdue") {
+    return "Nenhum lead passou do SLA.";
+  }
+  if (groupKey === "attention") {
+    return "Nenhum lead está perto do SLA.";
+  }
+  return "Nenhum lead dentro do prazo com os filtros atuais.";
+}
+
+function truncate(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit - 1)}...`;
+}
+
 function formatDurationSeconds(value: number | null | undefined): string {
   if (value === null || value === undefined) {
-    return "—";
+    return "-";
   }
   if (value < 60) {
     return `${value}s`;

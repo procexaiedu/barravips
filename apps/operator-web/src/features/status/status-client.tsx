@@ -80,7 +80,7 @@ export function StatusClient() {
           <h2>Verificando o sistema</h2>
           <span className="badge muted">Buscando</span>
         </div>
-        <p className="empty-state">Checando servidor, conexão com o WhatsApp, Google Calendar e IA.</p>
+        <p className="empty-state">Checando servidor, conexão com o WhatsApp, Google Calendar e agente.</p>
       </div>
     );
   }
@@ -172,7 +172,7 @@ export function StatusClient() {
 
       <section className="panel">
         <div className="panel-heading">
-          <h2>IA respondendo</h2>
+          <h2>Agente respondendo</h2>
           {state.errors.agent ? (
             <span className="badge danger">Erro</span>
           ) : state.agent && state.agent.failed_or_partial.value > 0 ? (
@@ -257,7 +257,7 @@ export function StatusClient() {
             </div>
           </div>
         ) : (
-          <p className="empty-state">Sem dados da IA agora.</p>
+          <p className="empty-state">Sem dados do agente agora.</p>
         )}
       </section>
 

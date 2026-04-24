@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test("dashboard renders through the operator BFF with insights", async ({ page }) => {
+test("dashboard renders through the operator BFF", async ({ page }) => {
   const requests: string[] = [];
   page.on("request", (request) => {
     requests.push(request.url());
@@ -8,22 +8,24 @@ test("dashboard renders through the operator BFF with insights", async ({ page }
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Visão geral", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command center SDR", exact: true })).toBeVisible();
   await expect(page.getByText("BarraVips")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Números do momento", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Fila de prioridade", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Para resolver agora", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Transferências nos últimos 7 dias", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Tipo ainda indefinido/ })).toBeVisible();
-  await expect(page.getByText("Horários nos próximos 14 dias")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Performance", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Funil e handoffs", exact: true })).toBeVisible();
+  await expect(page.getByText("Próximo passo:").first()).toBeVisible();
 
   await page.waitForLoadState("networkidle");
 
   expect(requests.some((url) => url.includes("/api/operator/conversations"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/health"))).toBe(true);
   expect(requests.some((url) => url.includes("/api/operator/dashboard/queues"))).toBe(true);
   expect(requests.some((url) => url.includes("/api/operator/receipts"))).toBe(true);
   expect(requests.some((url) => url.includes("/api/operator/handoffs/summary"))).toBe(true);
   expect(requests.some((url) => url.includes("/api/operator/models/active"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/status/agent"))).toBe(true);
   expect(requests.filter(isApiRequest).every((url) => new URL(url).pathname.startsWith("/api/operator/"))).toBe(true);
   expect(requests.some(isDirectBackendRequest)).toBe(false);
   expect(await page.content()).not.toContain("dev-operator-api-key");
@@ -34,12 +36,14 @@ test("dashboard handles empty BFF states", async ({ page }) => {
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Números do momento", exact: true })).toBeVisible();
-  await expect(page.getByText("Nenhuma conversa precisando de atenção agora.")).toBeVisible();
-  await expect(page.getByText("Nenhum comprovante aguardando conferência.")).toBeVisible();
-  await expect(page.getByText("Nenhuma conversa registrada ainda.")).toBeVisible();
-  await expect(page.getByText("Nenhuma mídia pendente.")).toBeVisible();
-  await expect(page.getByText("Nenhuma modelo cadastrada.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
+  await expect(page.getByText("Agente nas últimas 24h", { exact: true })).toBeVisible();
+  await expect(page.getByText("Nenhuma execução nas últimas 24h.")).toBeVisible();
+  await expect(page.getByText("Comprovantes para revisar", { exact: true })).toBeVisible();
+  await expect(page.getByText("Nenhum comprovante aguardando revisão.")).toBeVisible();
+  await expect(page.getByText("Fila limpa.")).toBeVisible();
+  await expect(page.getByText("Nenhum lead te esperando.")).toBeVisible();
+  await expect(page.getByText("Nenhum agente cadastrado ainda.")).toBeVisible();
 });
 
 test("dashboard handles BFF error states", async ({ page }) => {
@@ -47,10 +51,9 @@ test("dashboard handles BFF error states", async ({ page }) => {
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Números do momento", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
   await expect(page.getByText("Não consegui montar o resumo completo.")).toBeVisible();
   await expect(page.getByText("Falha controlada em conversas").first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Como estão as conversas", exact: true })).toBeVisible();
 });
 
 test("dashboard sample data fits desktop and mobile", async ({ page }) => {
@@ -66,23 +69,86 @@ test("dashboard sample data fits desktop and mobile", async ({ page }) => {
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/dashboard");
-    await expect(page.getByRole("heading", { name: "Números do momento", exact: true })).toBeVisible();
+    const agentOpsCard = page.locator(".command-card").filter({ hasText: "Agente nas últimas 24h" });
+    const receiptsCard = page.locator(".command-card").filter({ hasText: "Comprovantes para revisar" });
+    await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Fila de prioridade", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Para resolver agora", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Agenda dos próximos 14 dias", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Como estão as conversas", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Mídias", exact: true })).toBeVisible();
-    await expect(page.getByText("Com erro de sincronização")).toBeVisible();
-    await expect(page.getByText("Mídias aguardando aprovação").first()).toBeVisible();
-    await expect(page.getByText("Comprovantes para conferir").first()).toBeVisible();
-    await expect(page.getByText("precisa conferir").first()).toBeVisible();
-    await expect(page.getByText("Cliente aguardando resposta").first()).toBeVisible();
-    await expect(page.getByText("aguarda resposta").first()).toBeVisible();
-    await expect(page.getByText("urgência imediata").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Performance", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Funil e handoffs", exact: true })).toBeVisible();
+    await expect(agentOpsCard).toContainText("Agente nas últimas 24h");
+    await expect(agentOpsCard).toContainText("12");
+    await expect(agentOpsCard).toContainText("1 falhas/parciais");
+    await expect(agentOpsCard).toContainText("1 fallback acionado");
+    await expect(agentOpsCard).toContainText("p95 4.2s");
+    await expect(receiptsCard).toContainText("Comprovantes para revisar");
+    await expect(receiptsCard).toContainText("1 aguardando revisão");
+    await expect(receiptsCard).toContainText("ticket médio R$ 620,00");
+    await expect(page.getByText("Pronto p/ humano").first()).toBeVisible();
+    await expect(page.getByText("Taxa de qualificação").first()).toBeVisible();
+    await expect(page.getByText("Leads quentes").first()).toBeVisible();
+    await expect(page.getByText("Conversas paradas").first()).toBeVisible();
+    await expect(page.getByText("Crescimento do pipeline").first()).toBeVisible();
+    await expect(page.getByText("Próximo passo:").first()).toBeVisible();
+
+    await expect(page.getByRole("heading", { name: "Financeiro", exact: true })).toBeVisible();
+    const financialLabels = [
+      "Pipeline aberto",
+      "Pipeline por estado",
+      "Ticket médio (7d)",
+      "Detectado (7d)",
+      "Divergência (7d)",
+      "Crescimento do pipeline (7d)",
+      "Taxa de conversão (30d)",
+      "Receita projetada",
+    ];
+    for (const label of financialLabels) {
+      await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
+    }
+    const financialCards = page.locator(".command-card-value").filter({ hasText: /^R\$/ });
+    expect(await financialCards.count()).toBeGreaterThanOrEqual(5);
+    await expect(page.getByText("+30%", { exact: true })).toBeVisible();
+    await expect(page.getByText("33%", { exact: true })).toBeVisible();
+    await expect(page.getByText("4/12 fechadas", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   }
 
   expect(requests.filter(isApiRequest).every((url) => new URL(url).pathname.startsWith("/api/operator/"))).toBe(true);
+});
+
+test("conversas renders as commercial inbox with drawer", async ({ page }) => {
+  await mockDashboardBff(page, "sample");
+
+  await page.goto("/conversas");
+
+  await expect(page.getByRole("heading", { name: "Conversas", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Todos/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Quentes/ })).toBeVisible();
+  await expect(page.getByPlaceholder("Buscar por nome, telefone, empresa ou mensagem")).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Próximo passo", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Assumir", exact: true }).first()).toBeVisible();
+
+  await page.getByText("Cliente 004").first().click();
+
+  await expect(page.getByLabel("Detalhes da conversa")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Assumir lead", exact: true })).toBeVisible();
+  await expect(page.getByText("Próximo passo sugerido")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("leads para assumir renders SLA queue", async ({ page }) => {
+  await mockDashboardBff(page, "sample");
+
+  await page.goto("/handoffs");
+
+  await expect(page.getByRole("heading", { name: "Leads para assumir", exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Aguardando humano").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Atrasados", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Atenção", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dentro do prazo", exact: true })).toBeVisible();
+  await expect(page.getByText("Motivo").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Assumir agora", exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("status page renders and hits the status BFF endpoints", async ({ page }) => {
@@ -107,7 +173,7 @@ test("status page renders and hits the status BFF endpoints", async ({ page }) =
 test("operator shell stays usable on mobile viewport", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/dashboard");
-  await expect(page.getByRole("heading", { name: "Visão geral", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command center SDR", exact: true })).toBeVisible();
   await expect(page.getByLabel("Menu principal")).toBeVisible();
 
   await page.goto("/status");
@@ -135,8 +201,8 @@ test("midias usage summary fits desktop and mobile", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Resumo da semana", exact: true })).toBeVisible();
     await expect(page.getByText("Aguardando aprovação").first()).toBeVisible();
     await expect(page.getByRole("link", { name: /^Sem categoria/ })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Mais enviadas aos clientes", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Mídias que falharam ao enviar", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Materiais mais enviados aos leads", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Materiais que falharam ao enviar", exact: true })).toBeVisible();
     await expect(page.locator("#media-40000000-0000-0000-0000-0000000000a1")).toBeVisible();
     await expectNoHorizontalOverflow(page);
   }
@@ -148,12 +214,13 @@ test("midias usage summary fits desktop and mobile", async ({ page }) => {
 test("main operator routes render inside the shell", async ({ page }) => {
   const routes = [
     ["/", "Visão geral"],
-    ["/dashboard", "Visão geral"],
+    ["/dashboard", "Command center SDR"],
     ["/conversas", "Conversas"],
-    ["/handoffs", "Transferências"],
+    ["/handoffs", "Leads para assumir"],
     ["/agenda", "Agenda"],
-    ["/midias", "Fotos e mídias"],
-    ["/modelos", "Minha modelo"],
+    ["/midias", "Biblioteca de materiais"],
+    ["/comprovantes", "Comprovantes"],
+    ["/agentes", "Agentes"],
     ["/status", "Status do sistema"],
   ] as const;
 
@@ -191,6 +258,10 @@ async function mockDashboardBff(
         return;
       }
       await route.fulfill({ json: mode === "sample" ? sample.summary : emptySummary() });
+      return;
+    }
+    if (url.pathname === "/api/operator/dashboard/health") {
+      await route.fulfill({ json: mode === "sample" ? sample.health : emptyDashboardHealth() });
       return;
     }
     if (url.pathname === "/api/operator/handoffs/summary") {
@@ -243,6 +314,10 @@ async function mockDashboardBff(
         status: 404,
         json: { error: { status: 404, message: "Nenhuma modelo ativa" } },
       });
+      return;
+    }
+    if (url.pathname === "/api/operator/status/agent") {
+      await route.fulfill({ json: mode === "sample" ? sample.agentOps : emptyAgentOpsSummary() });
       return;
     }
     await route.fulfill({ status: 404, json: { error: { status: 404, message: "Nao mockado" } } });
@@ -365,6 +440,8 @@ function emptySummary() {
     requestedEnd: now,
     todayStart: "2026-04-22T00:00:00.000Z",
     todayEnd: "2026-04-23T00:00:00.000Z",
+    last7Start: "2026-04-15T12:00:00.000Z",
+    last7End: now,
     next14Start: now,
     next14End: "2026-05-06T12:00:00.000Z",
     totalConversations: 0,
@@ -380,6 +457,17 @@ function emptySummary() {
     calendarSyncPending: 0,
     calendarSyncError: 0,
     totalScheduleSlots: 0,
+    readyForHumanCount: 0,
+    awaitingClientDecisionCount: 0,
+    stalledConversationsCount: 0,
+    hotLeadsCount: 0,
+    responseRate: 0,
+    responseRateSampleSize: 0,
+    qualificationRate: 0,
+    qualificationRateSampleSize: 0,
+    timeToFirstResponseAverageSeconds: null,
+    timeToFirstResponseSampleSize: 0,
+    funnelCounts: {},
   });
 }
 
@@ -398,6 +486,37 @@ function emptyHandoffSummary() {
     ackAverage: null,
     releaseAverage: null,
   });
+}
+
+function emptyDashboardHealth() {
+  const now = "2026-04-22T12:00:00.000Z";
+  return {
+    generated_at: now,
+    agent: {
+      status: "offline",
+      label: "Sem execuções recentes",
+      detail: "Nenhuma execução do agente nas últimas 24 horas.",
+      checked_at: now,
+    },
+    whatsapp: {
+      status: "disconnected",
+      label: "Desconectado",
+      detail: "Sem eventos recentes.",
+      checked_at: now,
+    },
+    calendar: {
+      status: "synced",
+      label: "Sincronizado",
+      detail: "Sem pendências ou erros relevantes de calendário.",
+      checked_at: now,
+    },
+    model: {
+      status: "missing",
+      label: "Sem agente",
+      detail: "Nenhum agente ativo cadastrado.",
+      checked_at: now,
+    },
+  };
 }
 
 function sampleDashboardData() {
@@ -463,6 +582,7 @@ function sampleDashboardData() {
     age_seconds: minutesAgo * 60,
     age_source: "app.messages.direction",
     reason: "Ultimo inbound nao tem outbound posterior registrado.",
+    next_best_action: "Responder a última mensagem e destravar a negociação.",
     drilldown_href: `/conversas/${conversationId}`,
     source: "app.messages.direction + provider_message_at/created_at",
     window: "latest_inbound_without_later_outbound",
@@ -628,6 +748,34 @@ function sampleDashboardData() {
       created_at: iso(500),
       updated_at: iso(20),
     },
+    health: {
+      generated_at: new Date(now).toISOString(),
+      agent: {
+        status: "degraded",
+        label: "Degradado",
+        detail: "1 falha ou parcial nas últimas 24h.",
+        checked_at: new Date(now).toISOString(),
+      },
+      whatsapp: {
+        status: "connected",
+        label: "Conectado",
+        detail: "Instância ativa.",
+        checked_at: new Date(now).toISOString(),
+      },
+      calendar: {
+        status: "pending",
+        label: "Com pendências",
+        detail: "1 horário aguardando sincronização.",
+        checked_at: new Date(now).toISOString(),
+      },
+      model: {
+        status: "pending",
+        label: "Com pendências",
+        detail: "3 ajustes pendentes no agente.",
+        checked_at: iso(20),
+      },
+    },
+    agentOps: emptyAgentOpsSummary(12, 1),
   };
   return {
     ...data,
@@ -637,6 +785,8 @@ function sampleDashboardData() {
       requestedEnd: new Date(now).toISOString(),
       todayStart: "2026-04-22T00:00:00.000Z",
       todayEnd: "2026-04-23T00:00:00.000Z",
+      last7Start: new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      last7End: new Date(now).toISOString(),
       next14Start: new Date(now).toISOString(),
       next14End: new Date(now + 14 * 24 * 60 * 60 * 1000).toISOString(),
       totalConversations: 17,
@@ -652,6 +802,41 @@ function sampleDashboardData() {
       calendarSyncPending: 1,
       calendarSyncError: 1,
       totalScheduleSlots: 3,
+      readyForHumanCount: 1,
+      awaitingClientDecisionCount: 2,
+      stalledConversationsCount: 1,
+      hotLeadsCount: 4,
+      responseRate: 67,
+      responseRateSampleSize: 3,
+      qualificationRate: 71,
+      qualificationRateSampleSize: 7,
+      timeToFirstResponseAverageSeconds: 1800,
+      timeToFirstResponseSampleSize: 3,
+      funnelCounts: {
+        NOVO: 2,
+        QUALIFICANDO: 4,
+        NEGOCIANDO: 5,
+        PRONTO_PARA_HUMANO: 2,
+        CONFIRMADO: 3,
+      },
+      openPipelineTotal: "4500.00",
+      openPipelineByState: { NOVO: "500.00", QUALIFICANDO: "1500.00", NEGOCIANDO: "2500.00" },
+      openPipelineSampleSize: 8,
+      avgTicketLast7d: "620.00",
+      avgTicketSampleSize: 5,
+      detectedTotalLast7d: "1800.00",
+      detectedTotalSampleSize: 4,
+      divergenceAbsLast7d: "60.00",
+      divergenceSampleSize: 3,
+      pipelineGrowthCurrent: "2600.00",
+      pipelineGrowthPrevious: "2000.00",
+      pipelineGrowthDeltaPercent: 30,
+      pipelineGrowthSampleSize: 9,
+      conversionRateNumerator: 4,
+      conversionRateDenominator: 12,
+      conversionRatePercent: 33,
+      projectedRevenueValue: "1500.00",
+      projectedRevenueMinimumSample: 10,
     }),
     handoffSummary: handoffSummary({
       generatedAt: new Date(now).toISOString(),
@@ -675,6 +860,8 @@ function dashboardSummary(input: {
   requestedEnd: string;
   todayStart: string;
   todayEnd: string;
+  last7Start: string;
+  last7End: string;
   next14Start: string;
   next14End: string;
   totalConversations: number;
@@ -690,6 +877,35 @@ function dashboardSummary(input: {
   calendarSyncPending: number;
   calendarSyncError: number;
   totalScheduleSlots: number;
+  readyForHumanCount: number;
+  awaitingClientDecisionCount: number;
+  stalledConversationsCount: number;
+  hotLeadsCount: number;
+  responseRate: number;
+  responseRateSampleSize: number;
+  qualificationRate: number;
+  qualificationRateSampleSize: number;
+  timeToFirstResponseAverageSeconds: number | null;
+  timeToFirstResponseSampleSize: number;
+  funnelCounts: Record<string, number>;
+  openPipelineTotal?: string;
+  openPipelineByState?: Record<string, string>;
+  openPipelineSampleSize?: number;
+  avgTicketLast7d?: string;
+  avgTicketSampleSize?: number;
+  detectedTotalLast7d?: string;
+  detectedTotalSampleSize?: number;
+  divergenceAbsLast7d?: string;
+  divergenceSampleSize?: number;
+  pipelineGrowthCurrent?: string;
+  pipelineGrowthPrevious?: string;
+  pipelineGrowthDeltaPercent?: number | null;
+  pipelineGrowthSampleSize?: number;
+  conversionRateNumerator?: number;
+  conversionRateDenominator?: number;
+  conversionRatePercent?: number | null;
+  projectedRevenueValue?: string | null;
+  projectedRevenueMinimumSample?: number;
 }) {
   const countMetric = (value: number, source: string, window: string, sampleSize: number) => ({
     value,
@@ -704,12 +920,21 @@ function dashboardSummary(input: {
     counts,
     meta: { source, window, sample_method: "full_aggregate", sample_size: sampleSize },
   });
+  const rateMetric = (value: number, source: string, window: string, sampleSize: number) => ({
+    value,
+    meta: { source, window, sample_method: "full_aggregate", sample_size: sampleSize },
+  });
+  const durationMetric = (averageSeconds: number | null, source: string, window: string, sampleSize: number) => ({
+    average_seconds: averageSeconds,
+    meta: { source, window, sample_method: "full_aggregate", sample_size: sampleSize },
+  });
   return {
     generated_at: input.generatedAt,
     requested_window: "24h",
     windows: {
       requested: { key: "requested", label: "24h", starts_at: input.requestedStart, ends_at: input.requestedEnd },
       today: { key: "today", label: "today", starts_at: input.todayStart, ends_at: input.todayEnd },
+      last_7_days: { key: "last_7_days", label: "last_7_days", starts_at: input.last7Start, ends_at: input.last7End },
       next_14_days: { key: "next_14_days", label: "next_14_days", starts_at: input.next14Start, ends_at: input.next14End },
       all_time: { key: "all_time", label: "all_time", starts_at: null, ends_at: null },
     },
@@ -727,6 +952,137 @@ function dashboardSummary(input: {
     schedule_slots_next_14d_by_status: breakdownMetric(input.scheduleCounts, "app.schedule_slots.status", "next_14_days", input.totalScheduleSlots),
     calendar_sync_pending: countMetric(input.calendarSyncPending, "app.schedule_slots.calendar_sync_status", "all_time", input.totalScheduleSlots),
     calendar_sync_error: countMetric(input.calendarSyncError, "app.schedule_slots.calendar_sync_status", "all_time", input.totalScheduleSlots),
+    ready_for_human_count: countMetric(input.readyForHumanCount, "app.conversations.handoff_status", "all_time", input.totalConversations),
+    awaiting_client_decision_count: countMetric(input.awaitingClientDecisionCount, "app.conversations.awaiting_client_decision", "all_time", input.totalConversations),
+    stalled_conversations_count: countMetric(input.stalledConversationsCount, "app.conversations.last_message_at", "all_time", input.totalConversations),
+    hot_leads_count: countMetric(input.hotLeadsCount, "app.conversations.expected_amount + urgency_profile + handoff_status", "all_time", input.totalConversations),
+    response_rate: rateMetric(input.responseRate, "app.messages.direction paired inbound->outbound <= 1h", "requested", input.responseRateSampleSize),
+    qualification_rate: rateMetric(input.qualificationRate, "app.conversations.created_at with current qualified state in last 7d", "last_7_days", input.qualificationRateSampleSize),
+    time_to_first_response: durationMetric(input.timeToFirstResponseAverageSeconds, "app.messages first inbound -> first outbound", "requested", input.timeToFirstResponseSampleSize),
+    conversation_funnel: breakdownMetric(input.funnelCounts, "app.conversations.state + handoff_status", "all_time", input.totalConversations),
+    financial: {
+      open_pipeline_total: {
+        value: input.openPipelineTotal ?? "0",
+        meta: {
+          source: "app.conversations.expected_amount (open states)",
+          window: "all_time",
+          sample_method: "full_aggregate",
+          sample_size: input.openPipelineSampleSize ?? 0,
+        },
+      },
+      open_pipeline_by_state: {
+        amounts: input.openPipelineByState ?? { NOVO: "0", QUALIFICANDO: "0", NEGOCIANDO: "0" },
+        meta: {
+          source: "app.conversations.expected_amount grouped by state (open states)",
+          window: "all_time",
+          sample_method: "full_aggregate",
+          sample_size: input.openPipelineSampleSize ?? 0,
+        },
+      },
+      avg_ticket_last_7d: {
+        value: input.avgTicketLast7d ?? "0",
+        meta: {
+          source: "app.conversations.expected_amount avg in last 7d",
+          window: "last_7_days",
+          sample_method: "full_aggregate",
+          sample_size: input.avgTicketSampleSize ?? 0,
+        },
+      },
+      detected_total_last_7d: {
+        value: input.detectedTotalLast7d ?? "0",
+        meta: {
+          source: "app.receipts.detected_amount sum of VALID in last 7d",
+          window: "last_7_days",
+          sample_method: "full_aggregate",
+          sample_size: input.detectedTotalSampleSize ?? 0,
+        },
+      },
+      divergence_abs_last_7d: {
+        value: input.divergenceAbsLast7d ?? "0",
+        meta: {
+          source: "app.receipts abs(detected-expected) sum in last 7d",
+          window: "last_7_days",
+          sample_method: "full_aggregate",
+          sample_size: input.divergenceSampleSize ?? 0,
+        },
+      },
+      pipeline_growth: {
+        current_amount: input.pipelineGrowthCurrent ?? "0",
+        previous_amount: input.pipelineGrowthPrevious ?? "0",
+        delta_percent: input.pipelineGrowthDeltaPercent ?? null,
+        meta: {
+          source: "app.conversations.expected_amount in 7d vs previous 7d",
+          window: "last_7_days",
+          sample_method: "full_aggregate",
+          sample_size: input.pipelineGrowthSampleSize ?? 0,
+        },
+      },
+      conversion_rate_last_30d: {
+        value_percent: input.conversionRatePercent ?? null,
+        numerator: input.conversionRateNumerator ?? 0,
+        denominator: input.conversionRateDenominator ?? 0,
+        meta: {
+          source: "app.conversations.state CONFIRMADO / (CONFIRMADO+ESCALADO) in last 30d",
+          window: "last_30_days",
+          sample_method: "full_aggregate",
+          sample_size: input.conversionRateDenominator ?? 0,
+        },
+      },
+      projected_revenue: {
+        value: input.projectedRevenueValue ?? null,
+        minimum_sample_size: input.projectedRevenueMinimumSample ?? 10,
+        meta: {
+          source: "open_pipeline_total * conversion_rate_last_30d",
+          window: "last_30_days",
+          sample_method: "full_aggregate",
+          sample_size: input.conversionRateDenominator ?? 0,
+        },
+      },
+    },
+  };
+}
+
+function emptyAgentOpsSummary(totalExecutions = 0, failedOrPartial = 0) {
+  const now = "2026-04-22T12:00:00.000Z";
+  return {
+    generated_at: now,
+    requested_window: "24h",
+    windows: {
+      requested: { key: "requested", label: "24h", starts_at: "2026-04-21T12:00:00.000Z", ends_at: now },
+    },
+    total_executions: {
+      value: totalExecutions,
+      meta: { source: "logs.agent_executions", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    executions_by_status: {
+      counts: { SUCCESS: Math.max(0, totalExecutions - failedOrPartial), PARTIAL: failedOrPartial, FAILED: 0, SKIPPED: 0 },
+      meta: { source: "logs.agent_executions.status", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    failed_or_partial: {
+      value: failedOrPartial,
+      meta: { source: "logs.agent_executions.status", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    duration: {
+      p50_ms: totalExecutions > 0 ? 1200 : null,
+      p95_ms: totalExecutions > 0 ? 4200 : null,
+      average_ms: totalExecutions > 0 ? 1900 : null,
+      meta: { source: "logs.agent_executions.duration_ms", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    fallback_used: {
+      value: failedOrPartial,
+      meta: { source: "logs.agent_executions.fallback_used", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    tool_failures: {
+      value: failedOrPartial,
+      meta: { source: "logs.agent_executions.error_summary", window: "requested", sample_method: "full_aggregate", sample_size: totalExecutions },
+    },
+    latest_failures: [],
+    latest_failures_meta: {
+      source: "logs.agent_executions.status",
+      window: "requested",
+      sample_method: "full_aggregate",
+      sample_size: failedOrPartial,
+    },
   };
 }
 
@@ -795,7 +1151,12 @@ async function expectNoHorizontalOverflow(page: Page) {
       ".metric",
       ".attention-list",
       ".attention-item",
-      ".queue-item",
+      ".priority-queue-item",
+      ".command-card",
+      ".health-pill",
+      ".pending-item",
+      ".performance-stat",
+      ".funnel-stage",
       ".bar-row",
       ".link-pill",
       ".badge",

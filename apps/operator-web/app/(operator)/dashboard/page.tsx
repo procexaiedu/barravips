@@ -5,8 +5,8 @@ export default function DashboardPage() {
   return (
     <section className="page-stack">
       <PageHeader
-        title="Visão geral"
-        description="O que precisa da sua atenção agora: clientes esperando, fotos para aprovar e a agenda da semana."
+        title="Command center SDR"
+        description="Saúde do agente, prioridades humanas, fila ranqueada e sinais do funil em uma única visão operacional."
       />
       <DashboardClient />
     </section>

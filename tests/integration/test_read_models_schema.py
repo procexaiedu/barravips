@@ -19,6 +19,7 @@ from barra_vips_api.db import get_conn as api_get_conn
 from barra_vips_contracts.v1 import (
     AgentOpsSummaryRead,
     ConversationDetailRead,
+    DashboardHealthRead,
     ConversationQueueItemRead,
     ConversationRead,
     DashboardSummaryRead,
@@ -78,8 +79,19 @@ def _insert_dashboard_summary_fixture(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-0000000000aa"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
-        VALUES (%(model_id)s, 'Modelo Dashboard Fixture', true)
+        INSERT INTO app.models (
+          id, display_name, is_active, persona_json, services_json, pricing_json, languages, calendar_external_id
+        )
+        VALUES (
+          %(model_id)s,
+          'Modelo Dashboard Fixture',
+          true,
+          '{"tom": "PENDING_DECISION"}'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          ARRAY[]::text[],
+          NULL
+        )
         """,
         {"model_id": model_id},
     )
@@ -123,6 +135,43 @@ def _insert_dashboard_summary_fixture(conn: Any) -> None:
                 "handoff_status": handoff_status,
             },
         )
+    conn.execute(
+        """
+        INSERT INTO app.messages (
+          conversation_id, client_id, direction, role, message_type, content_text, from_me, provider_message_at
+        ) VALUES
+          (
+            '30000000-0000-0000-0000-0000000000a1',
+            '20000000-0000-0000-0000-0000000000a1',
+            'INBOUND',
+            'client',
+            'text',
+            'primeiro contato',
+            false,
+            now() - interval '50 minutes'
+          ),
+          (
+            '30000000-0000-0000-0000-0000000000a1',
+            '20000000-0000-0000-0000-0000000000a1',
+            'OUTBOUND',
+            'agent',
+            'text',
+            'resposta rapida',
+            false,
+            now() - interval '20 minutes'
+          ),
+          (
+            '30000000-0000-0000-0000-0000000000a4',
+            '20000000-0000-0000-0000-0000000000a4',
+            'INBOUND',
+            'client',
+            'text',
+            'oi',
+            false,
+            now() - interval '30 minutes'
+          )
+        """
+    )
     media_rows = [
         ("40000000-0000-0000-0000-0000000000a1", "image", None, "PENDING", "pending-null.jpg"),
         ("40000000-0000-0000-0000-0000000000a2", "video", "portfolio", "PENDING", "pending-category.mp4"),
@@ -340,6 +389,250 @@ def _insert_receipts_fixture(conn: Any) -> dict[str, str]:
     return ids
 
 
+def _insert_dashboard_financial_fixture(conn: Any) -> None:
+    """Seeds conversations with expected_amount and receipts for financial aggregates."""
+    model_id = "10000000-0000-0000-0000-0000000000ff"
+    conn.execute(
+        """
+        INSERT INTO app.models (id, display_name, is_active)
+        VALUES (%(model_id)s, 'Modelo Financial Fixture', true)
+        """,
+        {"model_id": model_id},
+    )
+    clients = [
+        ("25000000-0000-0000-0000-0000000000f1", "5521544444441@s.whatsapp.net", "Cliente Fin 1"),
+        ("25000000-0000-0000-0000-0000000000f2", "5521544444442@s.whatsapp.net", "Cliente Fin 2"),
+        ("25000000-0000-0000-0000-0000000000f3", "5521544444443@s.whatsapp.net", "Cliente Fin 3"),
+        ("25000000-0000-0000-0000-0000000000f4", "5521544444444@s.whatsapp.net", "Cliente Fin 4"),
+    ]
+    for client_id, jid, name in clients:
+        conn.execute(
+            """
+            INSERT INTO app.clients (id, whatsapp_jid, display_name)
+            VALUES (%(id)s, %(jid)s, %(name)s)
+            """,
+            {"id": client_id, "jid": jid, "name": name},
+        )
+
+    # Three open-pipeline conversations with expected_amount (in last 7d) and
+    # one CONFIRMADO with expected_amount (should not contribute to open_pipeline).
+    conversations = [
+        (
+            "37000000-0000-0000-0000-0000000000f1",
+            "25000000-0000-0000-0000-0000000000f1",
+            "NOVO",
+            "100.00",
+            "now() - interval '1 day'",
+        ),
+        (
+            "37000000-0000-0000-0000-0000000000f2",
+            "25000000-0000-0000-0000-0000000000f2",
+            "QUALIFICANDO",
+            "500.00",
+            "now() - interval '2 days'",
+        ),
+        (
+            "37000000-0000-0000-0000-0000000000f3",
+            "25000000-0000-0000-0000-0000000000f3",
+            "NEGOCIANDO",
+            "1000.00",
+            "now() - interval '3 days'",
+        ),
+        (
+            "37000000-0000-0000-0000-0000000000f4",
+            "25000000-0000-0000-0000-0000000000f4",
+            "CONFIRMADO",
+            "3000.00",
+            "now() - interval '4 days'",
+        ),
+    ]
+    for conversation_id, client_id, state, expected_amount, created_at in conversations:
+        conn.execute(
+            f"""
+            INSERT INTO app.conversations (
+              id, client_id, model_id, state, flow_type, handoff_status,
+              expected_amount, created_at
+            ) VALUES (
+              %(id)s, %(client_id)s, %(model_id)s, %(state)s, 'INTERNAL', 'NONE',
+              %(expected_amount)s, {created_at}
+            )
+            """,
+            {
+                "id": conversation_id,
+                "client_id": client_id,
+                "model_id": model_id,
+                "state": state,
+                "expected_amount": expected_amount,
+            },
+        )
+
+    # Messages required by the receipts foreign key.
+    conn.execute(
+        """
+        INSERT INTO app.messages (
+          id, conversation_id, client_id, direction, role, message_type, content_text
+        ) VALUES
+          (
+            '38000000-0000-0000-0000-0000000000f1',
+            '37000000-0000-0000-0000-0000000000f1',
+            '25000000-0000-0000-0000-0000000000f1',
+            'INBOUND', 'client', 'image', '[comprovante 1]'
+          ),
+          (
+            '38000000-0000-0000-0000-0000000000f2',
+            '37000000-0000-0000-0000-0000000000f2',
+            '25000000-0000-0000-0000-0000000000f2',
+            'INBOUND', 'client', 'image', '[comprovante 2]'
+          ),
+          (
+            '38000000-0000-0000-0000-0000000000f3',
+            '37000000-0000-0000-0000-0000000000f3',
+            '25000000-0000-0000-0000-0000000000f3',
+            'INBOUND', 'client', 'image', '[comprovante 3]'
+          ),
+          (
+            '38000000-0000-0000-0000-0000000000f4',
+            '37000000-0000-0000-0000-0000000000f4',
+            '25000000-0000-0000-0000-0000000000f4',
+            'INBOUND', 'client', 'image', '[comprovante 4]'
+          )
+        """
+    )
+
+    # Receipts inside last 7d:
+    #   VALID 200 vs expected 250 (contributes to detected_total and divergence)
+    #   INVALID 900 vs expected 1000 (contributes to divergence only)
+    #   NULL detected / NULL expected (should be ignored in divergence)
+    # One UNCERTAIN outside the window (should be ignored everywhere in the 7d aggregates).
+    conn.execute(
+        """
+        INSERT INTO app.receipts (
+          id, conversation_id, client_id, message_id, storage_path,
+          detected_amount, expected_amount, analysis_status, tolerance_applied,
+          needs_review, created_at
+        ) VALUES
+          (
+            '39000000-0000-0000-0000-0000000000f1',
+            '37000000-0000-0000-0000-0000000000f1',
+            '25000000-0000-0000-0000-0000000000f1',
+            '38000000-0000-0000-0000-0000000000f1',
+            'receipt-valid.jpg', 200.00, 250.00, 'VALID', 10.00, false,
+            now() - interval '2 days'
+          ),
+          (
+            '39000000-0000-0000-0000-0000000000f2',
+            '37000000-0000-0000-0000-0000000000f2',
+            '25000000-0000-0000-0000-0000000000f2',
+            '38000000-0000-0000-0000-0000000000f2',
+            'receipt-invalid.jpg', 900.00, 1000.00, 'INVALID', NULL, true,
+            now() - interval '3 days'
+          ),
+          (
+            '39000000-0000-0000-0000-0000000000f3',
+            '37000000-0000-0000-0000-0000000000f3',
+            '25000000-0000-0000-0000-0000000000f3',
+            '38000000-0000-0000-0000-0000000000f3',
+            'receipt-partial.jpg', NULL, 500.00, 'PENDING', NULL, true,
+            now() - interval '1 day'
+          ),
+          (
+            '39000000-0000-0000-0000-0000000000f4',
+            '37000000-0000-0000-0000-0000000000f4',
+            '25000000-0000-0000-0000-0000000000f4',
+            '38000000-0000-0000-0000-0000000000f4',
+            'receipt-outside.jpg', 1500.00, 1500.00, 'UNCERTAIN', NULL, false,
+            now() - interval '10 days'
+          )
+        """
+    )
+
+
+def _insert_dashboard_growth_fixture(conn: Any) -> None:
+    """Seeds conversations covering 14d pipeline window + 12 terminal conversations in 30d."""
+    model_id = "10000000-0000-0000-0000-0000000000ab"
+    conn.execute(
+        """
+        INSERT INTO app.models (id, display_name, is_active)
+        VALUES (%(model_id)s, 'Modelo Growth Fixture', true)
+        """,
+        {"model_id": model_id},
+    )
+
+    # Pipeline growth: one NOVO in previous window (7-14d ago, 1000)
+    #                  two NOVO in current window (last 7d, 400 + 800 = 1200).
+    growth_conversations = [
+        ("41000000-0000-0000-0000-0000000000a1", "NOVO", "1000.00", "now() - interval '10 days'"),
+        ("41000000-0000-0000-0000-0000000000a2", "NOVO", "400.00", "now() - interval '2 days'"),
+        ("41000000-0000-0000-0000-0000000000a3", "NOVO", "800.00", "now() - interval '1 day'"),
+    ]
+    for idx, (conversation_id, state, amount, created_at) in enumerate(growth_conversations, start=1):
+        client_id = f"28000000-0000-0000-0000-0000000000a{idx}"
+        conn.execute(
+            """
+            INSERT INTO app.clients (id, whatsapp_jid, display_name)
+            VALUES (%(id)s, %(jid)s, %(name)s)
+            """,
+            {
+                "id": client_id,
+                "jid": f"5521566666660{idx}@s.whatsapp.net",
+                "name": f"Cliente Growth {idx}",
+            },
+        )
+        conn.execute(
+            f"""
+            INSERT INTO app.conversations (
+              id, client_id, model_id, state, flow_type, handoff_status,
+              expected_amount, created_at
+            ) VALUES (
+              %(id)s, %(client_id)s, %(model_id)s, %(state)s, 'INTERNAL', 'NONE',
+              %(expected_amount)s, {created_at}
+            )
+            """,
+            {
+                "id": conversation_id,
+                "client_id": client_id,
+                "model_id": model_id,
+                "state": state,
+                "expected_amount": amount,
+            },
+        )
+
+    # Conversion rate: 6 CONFIRMADO + 6 ESCALADO within last 30d (50% rate).
+    terminal_states = ["CONFIRMADO"] * 6 + ["ESCALADO"] * 6
+    for idx, state in enumerate(terminal_states, start=1):
+        # Use hex digit suffixes (1..c) to keep the UUIDs valid.
+        suffix = format(idx, "x")
+        conversation_id = f"42000000-0000-0000-0000-0000000000b{suffix}"
+        client_id = f"29000000-0000-0000-0000-0000000000b{suffix}"
+        conn.execute(
+            """
+            INSERT INTO app.clients (id, whatsapp_jid, display_name)
+            VALUES (%(id)s, %(jid)s, %(name)s)
+            """,
+            {
+                "id": client_id,
+                "jid": f"5521577777770{idx:02d}@s.whatsapp.net",
+                "name": f"Cliente Terminal {idx}",
+            },
+        )
+        conn.execute(
+            """
+            INSERT INTO app.conversations (
+              id, client_id, model_id, state, flow_type, handoff_status, created_at
+            ) VALUES (
+              %(id)s, %(client_id)s, %(model_id)s, %(state)s, 'INTERNAL', 'NONE',
+              now() - interval '15 days'
+            )
+            """,
+            {
+                "id": conversation_id,
+                "client_id": client_id,
+                "model_id": model_id,
+                "state": state,
+            },
+        )
+
+
 @pytest.fixture()
 def without_active_model() -> Iterator[None]:
     with connect() as conn:
@@ -405,6 +698,14 @@ class TestDashboardSummaryRead:
         assert summary.schedule_slots_next_14d_total.value == 0
         assert summary.calendar_sync_pending.value == 0
         assert summary.calendar_sync_error.value == 0
+        assert summary.ready_for_human_count.value == 0
+        assert summary.awaiting_client_decision_count.value == 0
+        assert summary.stalled_conversations_count.value == 0
+        assert summary.hot_leads_count.value == 0
+        assert summary.response_rate.value == 0
+        assert summary.qualification_rate.value == 0
+        assert summary.time_to_first_response.average_seconds is None
+        assert summary.conversation_funnel.counts["PRONTO_PARA_HUMANO"] == 0
         assert summary.total_conversations.meta.sample_method == "full_aggregate"
         assert summary.total_conversations.meta.sample_size == 0
         assert set(summary.conversations_by_state.counts) == {
@@ -414,6 +715,34 @@ class TestDashboardSummaryRead:
             "CONFIRMADO",
             "ESCALADO",
         }
+        assert summary.financial.open_pipeline_total.value == Decimal("0")
+        assert summary.financial.open_pipeline_total.meta.sample_size == 0
+        assert set(summary.financial.open_pipeline_by_state.amounts) == {
+            "NOVO",
+            "QUALIFICANDO",
+            "NEGOCIANDO",
+        }
+        assert all(
+            amount == Decimal("0")
+            for amount in summary.financial.open_pipeline_by_state.amounts.values()
+        )
+        assert summary.financial.avg_ticket_last_7d.value == Decimal("0")
+        assert summary.financial.avg_ticket_last_7d.meta.sample_size == 0
+        assert summary.financial.detected_total_last_7d.value == Decimal("0")
+        assert summary.financial.detected_total_last_7d.meta.sample_size == 0
+        assert summary.financial.divergence_abs_last_7d.value == Decimal("0")
+        assert summary.financial.divergence_abs_last_7d.meta.sample_size == 0
+        assert summary.financial.pipeline_growth.current_amount == Decimal("0")
+        assert summary.financial.pipeline_growth.previous_amount == Decimal("0")
+        assert summary.financial.pipeline_growth.delta_percent is None
+        assert summary.financial.pipeline_growth.meta.sample_size == 0
+        assert summary.financial.conversion_rate_last_30d.value_percent is None
+        assert summary.financial.conversion_rate_last_30d.numerator == 0
+        assert summary.financial.conversion_rate_last_30d.denominator == 0
+        assert summary.financial.conversion_rate_last_30d.meta.sample_size == 0
+        assert summary.financial.projected_revenue.value is None
+        assert summary.financial.projected_revenue.minimum_sample_size == 10
+        assert summary.financial.projected_revenue.meta.sample_size == 0
 
     def test_summary_aggregates_seeded_operational_data(self, isolated_dashboard_db, api_headers):
         test_client, conn = isolated_dashboard_db
@@ -441,6 +770,19 @@ class TestDashboardSummaryRead:
         assert summary.schedule_slots_next_14d_by_status.counts["CANCELLED"] == 1
         assert summary.calendar_sync_pending.value == 1
         assert summary.calendar_sync_error.value == 1
+        assert summary.ready_for_human_count.value == 1
+        assert summary.awaiting_client_decision_count.value == 0
+        assert summary.stalled_conversations_count.value == 0
+        assert summary.hot_leads_count.value == 2
+        assert summary.response_rate.value == 50
+        assert summary.response_rate.meta.sample_size == 2
+        assert summary.qualification_rate.value == 75
+        assert summary.qualification_rate.meta.window == "last_7_days"
+        assert summary.time_to_first_response.average_seconds == 1800
+        assert summary.time_to_first_response.meta.sample_size == 1
+        assert summary.conversation_funnel.counts["NOVO"] == 1
+        assert summary.conversation_funnel.counts["QUALIFICANDO"] == 1
+        assert summary.conversation_funnel.counts["PRONTO_PARA_HUMANO"] == 2
         assert summary.active_conversations.meta.source == "app.conversations.last_message_at"
         assert summary.active_conversations.meta.window == "requested"
         assert summary.active_conversations.meta.sample_size == 4
@@ -452,6 +794,158 @@ class TestDashboardSummaryRead:
             params={"window": "7d"},
         )
         assert response.status_code == 422
+
+    def test_summary_financial_aggregates_amounts_and_receipts(
+        self, isolated_dashboard_db, api_headers
+    ):
+        test_client, conn = isolated_dashboard_db
+        _insert_dashboard_financial_fixture(conn)
+
+        response = test_client.get("/api/dashboard/summary", headers=api_headers)
+        assert response.status_code == 200, response.text
+
+        summary = DashboardSummaryRead.model_validate(response.json())
+        financial = summary.financial
+
+        assert financial.open_pipeline_total.value == Decimal("1600.00")
+        assert financial.open_pipeline_by_state.amounts["NOVO"] == Decimal("100.00")
+        assert financial.open_pipeline_by_state.amounts["QUALIFICANDO"] == Decimal("500.00")
+        assert financial.open_pipeline_by_state.amounts["NEGOCIANDO"] == Decimal("1000.00")
+        # CONFIRMADO and ESCALADO are excluded from the open pipeline totals.
+        assert "CONFIRMADO" not in financial.open_pipeline_by_state.amounts
+        assert "ESCALADO" not in financial.open_pipeline_by_state.amounts
+
+        # Three conversations created in the last 7d had expected_amount set (100, 500, 1000).
+        assert financial.avg_ticket_last_7d.value == Decimal("533.33")
+        assert financial.avg_ticket_last_7d.meta.sample_size == 3
+
+        # Only VALID receipts within 7d contribute to detected_total.
+        # Fixture seeds one VALID (200.00), one INVALID (900.00) and one UNCERTAIN outside window.
+        assert financial.detected_total_last_7d.value == Decimal("200.00")
+        assert financial.detected_total_last_7d.meta.sample_size == 1
+
+        # Divergence ignores rows with any of the two amounts NULL.
+        # VALID: |200 - 250| = 50. INVALID: |900 - 1000| = 100. Sum = 150.
+        assert financial.divergence_abs_last_7d.value == Decimal("150.00")
+        assert financial.divergence_abs_last_7d.meta.sample_size == 2
+
+        # All four seeded conversations were created within the last 7 days, so
+        # the previous window (7-14d ago) is empty -> delta_percent is None.
+        assert financial.pipeline_growth.current_amount == Decimal("4600.00")
+        assert financial.pipeline_growth.previous_amount == Decimal("0")
+        assert financial.pipeline_growth.delta_percent is None
+
+        # One CONFIRMADO, zero ESCALADO -> 1/1 = 100%.
+        assert financial.conversion_rate_last_30d.numerator == 1
+        assert financial.conversion_rate_last_30d.denominator == 1
+        assert financial.conversion_rate_last_30d.value_percent == 100
+
+        # Terminal sample is below the 10-sample minimum, so forecast is null.
+        assert financial.projected_revenue.value is None
+        assert financial.projected_revenue.minimum_sample_size == 10
+        assert financial.projected_revenue.meta.sample_size == 1
+
+    def test_summary_pipeline_growth_and_forecast_with_sufficient_sample(
+        self, isolated_dashboard_db, api_headers
+    ):
+        test_client, conn = isolated_dashboard_db
+        _insert_dashboard_growth_fixture(conn)
+
+        response = test_client.get("/api/dashboard/summary", headers=api_headers)
+        assert response.status_code == 200, response.text
+
+        summary = DashboardSummaryRead.model_validate(response.json())
+        financial = summary.financial
+
+        # Current window: two conversations with expected_amount summing to 1200.
+        # Previous window (7-14d ago): one conversation with expected_amount 1000.
+        # Delta: (1200 - 1000) / 1000 = 20%.
+        assert financial.pipeline_growth.current_amount == Decimal("1200.00")
+        assert financial.pipeline_growth.previous_amount == Decimal("1000.00")
+        assert financial.pipeline_growth.delta_percent == 20
+
+        # 12 terminal conversations (6 CONFIRMADO + 6 ESCALADO) -> rate 50%.
+        assert financial.conversion_rate_last_30d.numerator == 6
+        assert financial.conversion_rate_last_30d.denominator == 12
+        assert financial.conversion_rate_last_30d.value_percent == 50
+
+        # Forecast = open_pipeline_total * (6/12).
+        # Seeded open pipeline (NOVO) = 800.00 -> forecast = 400.00.
+        assert financial.projected_revenue.value == Decimal("400.00")
+        assert financial.projected_revenue.meta.sample_size == 12
+
+
+class TestDashboardHealthRead:
+    def test_health_matches_contract_with_empty_database(self, isolated_dashboard_db, api_headers):
+        test_client, _conn = isolated_dashboard_db
+        response = test_client.get("/api/dashboard/health", headers=api_headers)
+        assert response.status_code == 200, response.text
+
+        health = DashboardHealthRead.model_validate(response.json())
+        assert health.agent.status == "offline"
+        assert health.whatsapp.status == "disconnected"
+        assert health.calendar.status == "synced"
+        assert health.model.status == "missing"
+
+    def test_health_aggregates_agent_whatsapp_calendar_and_model(self, isolated_dashboard_db, api_headers):
+        test_client, conn = isolated_dashboard_db
+        _insert_dashboard_summary_fixture(conn)
+        conn.execute(
+            """
+            INSERT INTO app.integration_status (
+              provider, instance, status, qr_code_ref, last_event_at, metadata_json, updated_at
+            ) VALUES (
+              'evolution',
+              'barra-vips-main',
+              'CONNECTED',
+              NULL,
+              now() - interval '5 minutes',
+              '{}'::jsonb,
+              now()
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO logs.agent_executions (
+              id, conversation_id, trace_id, status, duration_ms, tool_count,
+              retry_count, fallback_used, error_summary, created_at
+            ) VALUES
+              (
+                '60000000-0000-0000-0000-0000000000f1',
+                '30000000-0000-0000-0000-0000000000a1',
+                '70000000-0000-0000-0000-0000000000f1',
+                'SUCCESS',
+                1200,
+                1,
+                0,
+                false,
+                NULL,
+                now() - interval '2 hours'
+              ),
+              (
+                '60000000-0000-0000-0000-0000000000f2',
+                '30000000-0000-0000-0000-0000000000a2',
+                '70000000-0000-0000-0000-0000000000f2',
+                'FAILED',
+                2600,
+                1,
+                0,
+                false,
+                'falha de teste',
+                now() - interval '1 hour'
+              )
+            """
+        )
+
+        response = test_client.get("/api/dashboard/health", headers=api_headers)
+        assert response.status_code == 200, response.text
+
+        health = DashboardHealthRead.model_validate(response.json())
+        assert health.agent.status == "degraded"
+        assert health.whatsapp.status == "connected"
+        assert health.calendar.status == "error"
+        assert health.model.status == "pending"
 
 
 class TestMediaUsageSummaryRead:
@@ -838,6 +1332,7 @@ class TestDashboardQueuesRead:
         assert [str(item.conversation_id) for item in opened] == [ids["open_old"], ids["open_new"]]
         assert opened[0].age_source == "app.handoff_events.created_at"
         assert opened[0].drilldown_href == f"/conversas/{ids['open_old']}"
+        assert opened[0].next_best_action is not None
         assert opened[0].sample_size == 9
 
         waiting = [item for item in items if item.queue_key == "CLIENT_WAITING_RESPONSE"]

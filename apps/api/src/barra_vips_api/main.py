@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -20,6 +21,8 @@ from barra_vips_contracts.v1 import (
     ConversationDetailRead,
     ConversationQueueItemRead,
     ConversationRead,
+    DashboardHealthRead,
+    DashboardFinancialTimeseriesRead,
     DashboardSummaryRead,
     EvolutionConnectionUpdate,
     EvolutionMessagesUpsert,
@@ -95,6 +98,7 @@ HANDOFF_STATUSES = ("NONE", "OPENED", "ACKNOWLEDGED", "RELEASED")
 AGENT_EXECUTION_STATUSES = ("SUCCESS", "PARTIAL", "FAILED", "SKIPPED")
 HANDOFF_AGE_BUCKETS = ("0-15m", "15-30m", "30-60m", "1-4h", "4h+", "UNKNOWN")
 SCHEDULE_STATUSES = ("AVAILABLE", "BLOCKED", "HELD", "CONFIRMED", "CANCELLED")
+FUNNEL_STAGES = ("NOVO", "QUALIFICANDO", "NEGOCIANDO", "PRONTO_PARA_HUMANO", "CONFIRMADO")
 CONVERSATION_QUEUE_KEYS = {
     "OPEN_HANDOFF",
     "ACKNOWLEDGED_HANDOFF",
@@ -296,6 +300,11 @@ def get_dashboard_summary(
           now() AS requested_ends_at,
           date_trunc('day', now()) AS today_starts_at,
           date_trunc('day', now()) + INTERVAL '1 day' AS today_ends_at,
+          now() - INTERVAL '7 days' AS last_7_days_starts_at,
+          now() AS last_7_days_ends_at,
+          now() - INTERVAL '14 days' AS previous_7_days_starts_at,
+          now() - INTERVAL '30 days' AS last_30_days_starts_at,
+          now() AS last_30_days_ends_at,
           now() AS next_14_days_starts_at,
           now() + INTERVAL '14 days' AS next_14_days_ends_at
         """
@@ -328,6 +337,120 @@ def get_dashboard_summary(
     state_counts = _count_by(conn, "app.conversations", "state", CONVERSATION_STATES)
     flow_counts = _count_by(conn, "app.conversations", "flow_type", FLOW_TYPES)
     handoff_counts = _count_by(conn, "app.conversations", "handoff_status", HANDOFF_STATUSES)
+    ready_for_human_count = handoff_counts["OPENED"]
+    awaiting_client_decision_count = _count(
+        conn,
+        """
+        SELECT count(*)
+        FROM app.conversations
+        WHERE awaiting_client_decision = true
+        """,
+    )
+    stalled_conversations_count = _count(
+        conn,
+        """
+        SELECT count(*)
+        FROM app.conversations
+        WHERE last_message_at IS NOT NULL
+          AND last_message_at <= now() - INTERVAL '48 hours'
+          AND state <> 'CONFIRMADO'
+        """,
+    )
+    hot_leads_count = _count(
+        conn,
+        """
+        SELECT count(*)
+        FROM app.conversations
+        WHERE expected_amount IS NOT NULL
+           OR urgency_profile = 'IMMEDIATE'
+           OR handoff_status = 'OPENED'
+           OR (flow_type = 'EXTERNAL' AND handoff_status IN ('OPENED', 'ACKNOWLEDGED'))
+        """,
+    )
+    qualification_row = conn.execute(
+        """
+        SELECT
+          count(*)::int AS sample_size,
+          count(*) FILTER (
+            WHERE state IN ('QUALIFICANDO', 'NEGOCIANDO', 'CONFIRMADO', 'ESCALADO')
+          )::int AS qualified_count
+        FROM app.conversations
+        WHERE created_at >= %(starts_at)s
+          AND created_at < %(ends_at)s
+        """,
+        {
+            "starts_at": windows["last_7_days_starts_at"],
+            "ends_at": windows["last_7_days_ends_at"],
+        },
+    ).fetchone()
+    response_row = conn.execute(
+        """
+        WITH first_inbound AS (
+          SELECT
+            m.conversation_id,
+            min(COALESCE(m.provider_message_at, m.created_at)) AS first_inbound_at
+          FROM app.messages m
+          WHERE m.direction = 'INBOUND'
+            AND COALESCE(m.provider_message_at, m.created_at) >= %(starts_at)s
+            AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s
+          GROUP BY m.conversation_id
+        ),
+        paired AS (
+          SELECT
+            fi.conversation_id,
+            fi.first_inbound_at,
+            fo.first_outbound_at,
+            CASE
+              WHEN fo.first_outbound_at IS NULL THEN NULL
+              ELSE floor(extract(epoch FROM (fo.first_outbound_at - fi.first_inbound_at)))::int
+            END AS response_seconds
+          FROM first_inbound fi
+          LEFT JOIN LATERAL (
+            SELECT min(COALESCE(m.provider_message_at, m.created_at)) AS first_outbound_at
+            FROM app.messages m
+            WHERE m.conversation_id = fi.conversation_id
+              AND m.direction = 'OUTBOUND'
+              AND COALESCE(m.provider_message_at, m.created_at) >= fi.first_inbound_at
+          ) fo ON true
+        )
+        SELECT
+          count(*)::int AS sample_size,
+          count(response_seconds)::int AS responded_sample_size,
+          count(*) FILTER (
+            WHERE response_seconds IS NOT NULL AND response_seconds <= 3600
+          )::int AS within_sla_count,
+          CASE
+            WHEN count(response_seconds) = 0 THEN NULL
+            ELSE floor(avg(response_seconds))::int
+          END AS average_seconds
+        FROM paired
+        """,
+        {
+            "starts_at": windows["requested_starts_at"],
+            "ends_at": windows["requested_ends_at"],
+        },
+    ).fetchone()
+    funnel_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (
+            WHERE handoff_status NOT IN ('OPENED', 'ACKNOWLEDGED') AND state = 'NOVO'
+          )::int AS novo,
+          count(*) FILTER (
+            WHERE handoff_status NOT IN ('OPENED', 'ACKNOWLEDGED') AND state = 'QUALIFICANDO'
+          )::int AS qualificando,
+          count(*) FILTER (
+            WHERE handoff_status NOT IN ('OPENED', 'ACKNOWLEDGED') AND state = 'NEGOCIANDO'
+          )::int AS negociando,
+          count(*) FILTER (
+            WHERE handoff_status IN ('OPENED', 'ACKNOWLEDGED')
+          )::int AS pronto_para_humano,
+          count(*) FILTER (
+            WHERE handoff_status NOT IN ('OPENED', 'ACKNOWLEDGED') AND state = 'CONFIRMADO'
+          )::int AS confirmado
+        FROM app.conversations
+        """
+    ).fetchone()
 
     total_media = _count(conn, "SELECT count(*) FROM app.media_assets")
     media_pending = _count(
@@ -366,6 +489,97 @@ def get_dashboard_summary(
         "SELECT count(*) FROM app.schedule_slots WHERE calendar_sync_status = 'ERROR'",
     )
 
+    open_pipeline_states = ("NOVO", "QUALIFICANDO", "NEGOCIANDO")
+    open_pipeline_condition = "state IN ('NOVO','QUALIFICANDO','NEGOCIANDO')"
+    open_pipeline_by_state = _sum_by(
+        conn,
+        "app.conversations",
+        "state",
+        "expected_amount",
+        open_pipeline_states,
+        open_pipeline_condition,
+    )
+    open_pipeline_count = _count(
+        conn,
+        f"SELECT count(*) FROM app.conversations WHERE {open_pipeline_condition}",
+    )
+    open_pipeline_total_value = sum(open_pipeline_by_state.values(), Decimal("0"))
+    avg_ticket_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE expected_amount IS NOT NULL)::int AS sample_size,
+          round(avg(expected_amount)::numeric, 2) AS avg_amount
+        FROM app.conversations
+        WHERE created_at >= %(starts_at)s AND created_at < %(ends_at)s
+        """,
+        {
+            "starts_at": windows["last_7_days_starts_at"],
+            "ends_at": windows["last_7_days_ends_at"],
+        },
+    ).fetchone()
+    receipts_financial_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE analysis_status = 'VALID')::int AS valid_count,
+          COALESCE(
+            SUM(detected_amount) FILTER (WHERE analysis_status = 'VALID'),
+            0
+          ) AS detected_total,
+          count(*) FILTER (
+            WHERE detected_amount IS NOT NULL AND expected_amount IS NOT NULL
+          )::int AS divergence_sample_size,
+          COALESCE(
+            SUM(abs(detected_amount - expected_amount)) FILTER (
+              WHERE detected_amount IS NOT NULL AND expected_amount IS NOT NULL
+            ),
+            0
+          ) AS divergence_abs
+        FROM app.receipts
+        WHERE created_at >= %(starts_at)s AND created_at < %(ends_at)s
+        """,
+        {
+            "starts_at": windows["last_7_days_starts_at"],
+            "ends_at": windows["last_7_days_ends_at"],
+        },
+    ).fetchone()
+
+    pipeline_growth_row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(expected_amount) FILTER (
+            WHERE created_at >= %(current_start)s AND created_at < %(current_end)s
+          ), 0) AS current_total,
+          COALESCE(SUM(expected_amount) FILTER (
+            WHERE created_at >= %(previous_start)s AND created_at < %(current_start)s
+          ), 0) AS previous_total,
+          count(*) FILTER (
+            WHERE created_at >= %(previous_start)s
+              AND created_at < %(current_end)s
+              AND expected_amount IS NOT NULL
+          )::int AS sample_size
+        FROM app.conversations
+        """,
+        {
+            "current_start": windows["last_7_days_starts_at"],
+            "current_end": windows["last_7_days_ends_at"],
+            "previous_start": windows["previous_7_days_starts_at"],
+        },
+    ).fetchone()
+
+    conversion_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE state = 'CONFIRMADO')::int AS converted_count,
+          count(*) FILTER (WHERE state IN ('CONFIRMADO', 'ESCALADO'))::int AS terminal_count
+        FROM app.conversations
+        WHERE created_at >= %(starts_at)s AND created_at < %(ends_at)s
+        """,
+        {
+            "starts_at": windows["last_30_days_starts_at"],
+            "ends_at": windows["last_30_days_ends_at"],
+        },
+    ).fetchone()
+
     response_windows = {
         "requested": {
             "key": "requested",
@@ -379,6 +593,18 @@ def get_dashboard_summary(
             "starts_at": windows["today_starts_at"],
             "ends_at": windows["today_ends_at"],
         },
+        "last_7_days": {
+            "key": "last_7_days",
+            "label": "last_7_days",
+            "starts_at": windows["last_7_days_starts_at"],
+            "ends_at": windows["last_7_days_ends_at"],
+        },
+        "last_30_days": {
+            "key": "last_30_days",
+            "label": "last_30_days",
+            "starts_at": windows["last_30_days_starts_at"],
+            "ends_at": windows["last_30_days_ends_at"],
+        },
         "next_14_days": {
             "key": "next_14_days",
             "label": "next_14_days",
@@ -387,6 +613,35 @@ def get_dashboard_summary(
         },
         "all_time": {"key": "all_time", "label": "all_time", "starts_at": None, "ends_at": None},
     }
+
+    growth_current = Decimal(pipeline_growth_row["current_total"] or 0)
+    growth_previous = Decimal(pipeline_growth_row["previous_total"] or 0)
+    if growth_previous > 0:
+        growth_delta_percent: int | None = int(
+            round(((growth_current - growth_previous) / growth_previous) * 100)
+        )
+    else:
+        growth_delta_percent = None
+
+    conversion_converted = int(conversion_row["converted_count"] or 0)
+    conversion_terminal = int(conversion_row["terminal_count"] or 0)
+    if conversion_terminal > 0:
+        conversion_rate_percent: int | None = int(
+            round((conversion_converted / conversion_terminal) * 100)
+        )
+    else:
+        conversion_rate_percent = None
+
+    forecast_minimum_sample = 10
+    if (
+        conversion_terminal >= forecast_minimum_sample
+        and conversion_rate_percent is not None
+    ):
+        forecast_value: Decimal | None = (
+            open_pipeline_total_value * Decimal(conversion_converted) / Decimal(conversion_terminal)
+        ).quantize(Decimal("0.01"))
+    else:
+        forecast_value = None
 
     return {
         "generated_at": windows["generated_at"],
@@ -476,6 +731,319 @@ def get_dashboard_summary(
             window="all_time",
             sample_size=total_schedule_slots,
         ),
+        "ready_for_human_count": _metric(
+            ready_for_human_count,
+            source="app.conversations.handoff_status",
+            window="all_time",
+            sample_size=total_conversations,
+        ),
+        "awaiting_client_decision_count": _metric(
+            awaiting_client_decision_count,
+            source="app.conversations.awaiting_client_decision",
+            window="all_time",
+            sample_size=total_conversations,
+        ),
+        "stalled_conversations_count": _metric(
+            stalled_conversations_count,
+            source="app.conversations.last_message_at",
+            window="all_time",
+            sample_size=total_conversations,
+        ),
+        "hot_leads_count": _metric(
+            hot_leads_count,
+            source="app.conversations.expected_amount + urgency_profile + handoff_status",
+            window="all_time",
+            sample_size=total_conversations,
+        ),
+        "response_rate": _rate_metric(
+            _safe_percentage(response_row["within_sla_count"], response_row["sample_size"]),
+            source="app.messages.direction paired inbound->outbound <= 1h",
+            window="requested",
+            sample_size=response_row["sample_size"],
+        ),
+        "qualification_rate": _rate_metric(
+            _safe_percentage(qualification_row["qualified_count"], qualification_row["sample_size"]),
+            source="app.conversations.created_at with current qualified state in last 7d",
+            window="last_7_days",
+            sample_size=qualification_row["sample_size"],
+        ),
+        "time_to_first_response": _duration_metric(
+            response_row["average_seconds"],
+            source="app.messages first inbound -> first outbound",
+            window="requested",
+            sample_size=response_row["responded_sample_size"],
+        ),
+        "conversation_funnel": _breakdown(
+            {
+                "NOVO": funnel_row["novo"],
+                "QUALIFICANDO": funnel_row["qualificando"],
+                "NEGOCIANDO": funnel_row["negociando"],
+                "PRONTO_PARA_HUMANO": funnel_row["pronto_para_humano"],
+                "CONFIRMADO": funnel_row["confirmado"],
+            },
+            source="app.conversations.state + handoff_status",
+            window="all_time",
+            sample_size=total_conversations,
+        ),
+        "financial": {
+            "open_pipeline_total": _amount_metric(
+                open_pipeline_total_value,
+                source="app.conversations.expected_amount (open states)",
+                window="all_time",
+                sample_size=open_pipeline_count,
+            ),
+            "open_pipeline_by_state": _amount_breakdown(
+                open_pipeline_by_state,
+                source="app.conversations.expected_amount grouped by state (open states)",
+                window="all_time",
+                sample_size=open_pipeline_count,
+            ),
+            "avg_ticket_last_7d": _amount_metric(
+                avg_ticket_row["avg_amount"],
+                source="app.conversations.expected_amount avg in last 7d",
+                window="last_7_days",
+                sample_size=avg_ticket_row["sample_size"],
+            ),
+            "detected_total_last_7d": _amount_metric(
+                receipts_financial_row["detected_total"],
+                source="app.receipts.detected_amount sum of VALID in last 7d",
+                window="last_7_days",
+                sample_size=receipts_financial_row["valid_count"],
+            ),
+            "divergence_abs_last_7d": _amount_metric(
+                receipts_financial_row["divergence_abs"],
+                source="app.receipts abs(detected-expected) sum in last 7d",
+                window="last_7_days",
+                sample_size=receipts_financial_row["divergence_sample_size"],
+            ),
+            "pipeline_growth": {
+                "current_amount": growth_current,
+                "previous_amount": growth_previous,
+                "delta_percent": growth_delta_percent,
+                "meta": {
+                    "source": "app.conversations.expected_amount in 7d vs previous 7d",
+                    "window": "last_7_days",
+                    "sample_method": "full_aggregate",
+                    "sample_size": int(pipeline_growth_row["sample_size"] or 0),
+                },
+            },
+            "conversion_rate_last_30d": {
+                "value_percent": conversion_rate_percent,
+                "numerator": conversion_converted,
+                "denominator": conversion_terminal,
+                "meta": {
+                    "source": "app.conversations.state CONFIRMADO / (CONFIRMADO+ESCALADO) in last 30d",
+                    "window": "last_30_days",
+                    "sample_method": "full_aggregate",
+                    "sample_size": conversion_terminal,
+                },
+            },
+            "projected_revenue": {
+                "value": forecast_value,
+                "minimum_sample_size": forecast_minimum_sample,
+                "meta": {
+                    "source": "open_pipeline_total * conversion_rate_last_30d",
+                    "window": "last_30_days",
+                    "sample_method": "full_aggregate",
+                    "sample_size": conversion_terminal,
+                },
+            },
+        },
+    }
+
+
+@api.get("/dashboard/financial/timeseries", response_model=DashboardFinancialTimeseriesRead)
+def get_dashboard_financial_timeseries(
+    days: int = Query(default=30, ge=7, le=90),
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    bounds = conn.execute(
+        """
+        SELECT
+          date_trunc('day', now()) - (%(days)s::int - 1) * INTERVAL '1 day' AS starts_at,
+          date_trunc('day', now()) + INTERVAL '1 day' AS ends_at
+        """,
+        {"days": days},
+    ).fetchone()
+    points = conn.execute(
+        """
+        WITH day_series AS (
+          SELECT generate_series(
+            %(starts_at)s::timestamp,
+            (%(ends_at)s::timestamp - INTERVAL '1 day'),
+            INTERVAL '1 day'
+          )::date AS bucket_date
+        ),
+        conversation_daily AS (
+          SELECT
+            date_trunc('day', created_at)::date AS bucket_date,
+            COALESCE(SUM(expected_amount), 0) AS pipeline_new_amount,
+            AVG(expected_amount) FILTER (WHERE expected_amount IS NOT NULL) AS avg_ticket_amount,
+            count(*) FILTER (WHERE state = 'CONFIRMADO')::int AS conversions_count,
+            count(*) FILTER (WHERE state IN ('CONFIRMADO', 'ESCALADO'))::int AS terminal_count
+          FROM app.conversations
+          WHERE created_at >= %(starts_at)s
+            AND created_at < %(ends_at)s
+          GROUP BY 1
+        ),
+        receipt_daily AS (
+          SELECT
+            date_trunc('day', created_at)::date AS bucket_date,
+            COALESCE(SUM(detected_amount) FILTER (WHERE analysis_status = 'VALID'), 0) AS detected_total_amount
+          FROM app.receipts
+          WHERE created_at >= %(starts_at)s
+            AND created_at < %(ends_at)s
+          GROUP BY 1
+        )
+        SELECT
+          day_series.bucket_date AS date,
+          COALESCE(conversation_daily.pipeline_new_amount, 0) AS pipeline_new_amount,
+          COALESCE(receipt_daily.detected_total_amount, 0) AS detected_total_amount,
+          conversation_daily.avg_ticket_amount,
+          COALESCE(conversation_daily.conversions_count, 0)::int AS conversions_count,
+          COALESCE(conversation_daily.terminal_count, 0)::int AS terminal_count
+        FROM day_series
+        LEFT JOIN conversation_daily USING (bucket_date)
+        LEFT JOIN receipt_daily USING (bucket_date)
+        ORDER BY day_series.bucket_date
+        """,
+        {
+            "starts_at": bounds["starts_at"],
+            "ends_at": bounds["ends_at"],
+        },
+    ).fetchall()
+    return {
+        "days": days,
+        "starts_at": bounds["starts_at"],
+        "ends_at": bounds["ends_at"],
+        "points": [
+            {
+                "date": row["date"],
+                "pipeline_new_amount": Decimal(row["pipeline_new_amount"] or 0),
+                "detected_total_amount": Decimal(row["detected_total_amount"] or 0),
+                "avg_ticket_amount": (
+                    Decimal(row["avg_ticket_amount"])
+                    if row["avg_ticket_amount"] is not None
+                    else None
+                ),
+                "conversions_count": int(row["conversions_count"] or 0),
+                "terminal_count": int(row["terminal_count"] or 0),
+            }
+            for row in points
+        ],
+        "meta": {
+            "source": "app.conversations.created_at + app.receipts.created_at aggregated by day",
+            "window": "requested",
+            "sample_method": "full_aggregate",
+            "sample_size": len(points),
+        },
+    }
+
+
+@api.get("/dashboard/health", response_model=DashboardHealthRead)
+def get_dashboard_health(conn: Connection[dict[str, Any]] = Depends(get_conn)) -> dict[str, Any]:
+    generated_at = _now()
+    conn.execute("SELECT 1")
+    evolution = evolution_status(conn)
+    calendar = calendar_status(conn)
+    agent = agent_status(conn=conn)
+    active_model = _get_active_model_optional(conn)
+    model_pendencies = _count_model_pendencies(active_model)
+
+    if agent["total_executions"]["value"] == 0:
+        agent_signal = {
+            "status": "offline",
+            "label": "Sem execuções recentes",
+            "detail": "Nenhuma execução do agente nas últimas 24 horas.",
+            "checked_at": generated_at,
+        }
+    elif agent["failed_or_partial"]["value"] > 0:
+        agent_signal = {
+            "status": "degraded",
+            "label": "Degradado",
+            "detail": f"{agent['failed_or_partial']['value']} falhas ou parciais nas últimas 24h.",
+            "checked_at": generated_at,
+        }
+    else:
+        agent_signal = {
+            "status": "online",
+            "label": "Operando",
+            "detail": f"{agent['total_executions']['value']} execuções nas últimas 24h.",
+            "checked_at": generated_at,
+        }
+
+    if evolution["status"] == "CONNECTED":
+        whatsapp_signal = {
+            "status": "connected",
+            "label": "Conectado",
+            "detail": f"Instância {evolution['instance']} ativa.",
+            "checked_at": evolution["updated_at"],
+        }
+    elif evolution["status"] == "QR_REQUIRED":
+        whatsapp_signal = {
+            "status": "reconnecting",
+            "label": "Reconectando",
+            "detail": "WhatsApp aguardando nova leitura de QR code.",
+            "checked_at": evolution["updated_at"],
+        }
+    else:
+        whatsapp_signal = {
+            "status": "disconnected",
+            "label": "Desconectado",
+            "detail": f"Último evento em {evolution['last_event_at']}.",
+            "checked_at": evolution["updated_at"],
+        }
+
+    if calendar["error_slots"] > 0:
+        calendar_signal = {
+            "status": "error",
+            "label": "Com erro",
+            "detail": f"{calendar['error_slots']} horários com erro de sync.",
+            "checked_at": calendar["updated_at"],
+        }
+    elif calendar["pending_slots"] > 0:
+        calendar_signal = {
+            "status": "pending",
+            "label": "Com pendências",
+            "detail": f"{calendar['pending_slots']} horários aguardando sincronização.",
+            "checked_at": calendar["updated_at"],
+        }
+    else:
+        calendar_signal = {
+            "status": "synced",
+            "label": "Sincronizado",
+            "detail": "Sem pendências ou erros relevantes de calendário.",
+            "checked_at": calendar["updated_at"],
+        }
+
+    if active_model is None:
+        model_signal = {
+            "status": "missing",
+            "label": "Sem agente",
+            "detail": "Nenhum agente ativo cadastrado.",
+            "checked_at": generated_at,
+        }
+    elif model_pendencies > 0:
+        model_signal = {
+            "status": "pending",
+            "label": "Com pendências",
+            "detail": f"{model_pendencies} ajustes pendentes no agente {active_model['display_name']}.",
+            "checked_at": active_model["updated_at"],
+        }
+    else:
+        model_signal = {
+            "status": "complete",
+            "label": "Configurado",
+            "detail": f"Agente {active_model['display_name']} pronto para operar.",
+            "checked_at": active_model["updated_at"],
+        }
+
+    return {
+        "generated_at": generated_at,
+        "agent": agent_signal,
+        "whatsapp": whatsapp_signal,
+        "calendar": calendar_signal,
+        "model": model_signal,
     }
 
 
@@ -644,11 +1212,30 @@ def list_conversations(
     status: str | None = None,
     handoff_status: str | None = None,
     q: str | None = None,
+    min_amount: Annotated[Decimal | None, Query(ge=0)] = None,
+    max_amount: Annotated[Decimal | None, Query(ge=0)] = None,
+    sort: Literal["recent", "amount_asc", "amount_desc"] = "recent",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
-    where, params = _conversation_filters(status=status, handoff_status=handoff_status, q=q)
+    if (
+        min_amount is not None
+        and max_amount is not None
+        and min_amount > max_amount
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="min_amount must be less than or equal to max_amount",
+        )
+    where, params = _conversation_filters(
+        status=status,
+        handoff_status=handoff_status,
+        q=q,
+        min_amount=min_amount,
+        max_amount=max_amount,
+    )
+    order_clause = CONVERSATION_SORT_CLAUSES[sort]
     params["limit"] = page_size
     params["offset"] = (page - 1) * page_size
     total = conn.execute(f"SELECT count(*) AS total FROM app.conversations c JOIN app.clients cl ON cl.id = c.client_id {where}", params).fetchone()["total"]
@@ -676,7 +1263,7 @@ def list_conversations(
           LIMIT 1
         ) lm ON true
         {where}
-        ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC
+        ORDER BY {order_clause}
         LIMIT %(limit)s OFFSET %(offset)s
         """,
         params,
@@ -1214,14 +1801,33 @@ def get_media_content(
     return FileResponse(path, media_type=media_type)
 
 
+RECEIPT_AMOUNT_COLUMNS: dict[str, str] = {
+    "detected": "r.detected_amount",
+    "expected": "r.expected_amount",
+}
+
+
 @api.get("/receipts", response_model=PaginatedEnvelope[ReceiptRead])
 def list_receipts(
     needs_review: bool | None = None,
     status: str | None = None,
+    min_amount: Annotated[Decimal | None, Query(ge=0)] = None,
+    max_amount: Annotated[Decimal | None, Query(ge=0)] = None,
+    amount_field: Literal["detected", "expected"] = "detected",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
+    if (
+        min_amount is not None
+        and max_amount is not None
+        and min_amount > max_amount
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="min_amount must be less than or equal to max_amount",
+        )
+    amount_column = RECEIPT_AMOUNT_COLUMNS[amount_field]
     conditions = []
     params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
     if needs_review is not None:
@@ -1230,6 +1836,12 @@ def list_receipts(
     if status:
         conditions.append("r.analysis_status = %(status)s")
         params["status"] = status
+    if min_amount is not None:
+        conditions.append(f"{amount_column} >= %(min_amount)s")
+        params["min_amount"] = min_amount
+    if max_amount is not None:
+        conditions.append(f"{amount_column} <= %(max_amount)s")
+        params["max_amount"] = max_amount
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     total = conn.execute(
         f"""
@@ -1516,6 +2128,8 @@ def _conversation_filters(
     status: str | None,
     handoff_status: str | None,
     q: str | None,
+    min_amount: Decimal | None = None,
+    max_amount: Decimal | None = None,
 ) -> tuple[str, dict[str, Any]]:
     conditions = []
     params: dict[str, Any] = {}
@@ -1540,8 +2154,21 @@ def _conversation_filters(
             """
         )
         params["q"] = f"%{q}%"
+    if min_amount is not None:
+        conditions.append("c.expected_amount >= %(min_amount)s")
+        params["min_amount"] = min_amount
+    if max_amount is not None:
+        conditions.append("c.expected_amount <= %(max_amount)s")
+        params["max_amount"] = max_amount
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     return where, params
+
+
+CONVERSATION_SORT_CLAUSES: dict[str, str] = {
+    "recent": "COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC",
+    "amount_desc": "c.expected_amount DESC NULLS LAST, c.id ASC",
+    "amount_asc": "c.expected_amount ASC NULLS LAST, c.id ASC",
+}
 
 
 def _clean_model_display_name(value: str | None) -> str:
@@ -1612,9 +2239,102 @@ def _metric(value: int, *, source: str, window: str, sample_size: int) -> dict[s
     }
 
 
+def _rate_metric(value: int, *, source: str, window: str, sample_size: int) -> dict[str, Any]:
+    return {
+        "value": value,
+        "meta": {
+            "source": source,
+            "window": window,
+            "sample_method": "full_aggregate",
+            "sample_size": sample_size,
+        },
+    }
+
+
 def _breakdown(counts: dict[str, int], *, source: str, window: str, sample_size: int) -> dict[str, Any]:
     return {
         "counts": counts,
+        "meta": {
+            "source": source,
+            "window": window,
+            "sample_method": "full_aggregate",
+            "sample_size": sample_size,
+        },
+    }
+
+
+def _sum_by(
+    conn: Connection[dict[str, Any]],
+    table: str,
+    group_column: str,
+    amount_column: str,
+    labels: tuple[str, ...],
+    condition: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Decimal]:
+    amounts: dict[str, Decimal] = {label: Decimal("0") for label in labels}
+    where = f"WHERE {condition}" if condition else ""
+    rows = conn.execute(
+        f"""
+        SELECT {group_column} AS key, COALESCE(SUM({amount_column}), 0) AS value
+        FROM {table}
+        {where}
+        GROUP BY {group_column}
+        """,
+        params or {},
+    ).fetchall()
+    for row in rows:
+        key = row["key"]
+        if key in amounts:
+            amounts[key] = Decimal(row["value"] or 0)
+    return amounts
+
+
+def _amount_metric(
+    value: Decimal | None,
+    *,
+    source: str,
+    window: str,
+    sample_size: int,
+) -> dict[str, Any]:
+    return {
+        "value": Decimal(value or 0),
+        "meta": {
+            "source": source,
+            "window": window,
+            "sample_method": "full_aggregate",
+            "sample_size": sample_size,
+        },
+    }
+
+
+def _amount_breakdown(
+    amounts: dict[str, Decimal],
+    *,
+    source: str,
+    window: str,
+    sample_size: int,
+) -> dict[str, Any]:
+    return {
+        "amounts": amounts,
+        "meta": {
+            "source": source,
+            "window": window,
+            "sample_method": "full_aggregate",
+            "sample_size": sample_size,
+        },
+    }
+
+
+def _duration_metric(
+    average_seconds: int | None,
+    *,
+    source: str,
+    window: str,
+    sample_size: int,
+) -> dict[str, Any]:
+    return {
+        "average_seconds": average_seconds,
         "meta": {
             "source": source,
             "window": window,
@@ -1745,6 +2465,50 @@ def _handoff_duration_metric(
     }
 
 
+def _safe_percentage(numerator: int | None, denominator: int | None) -> int:
+    if not numerator or not denominator:
+        return 0
+    return round((numerator / denominator) * 100)
+
+
+def _get_active_model_optional(conn: Connection[dict[str, Any]]) -> dict[str, Any] | None:
+    return conn.execute(
+        f"""
+        SELECT {MODEL_SELECT_COLUMNS}
+        FROM app.models
+        WHERE is_active = true
+        LIMIT 1
+        """
+    ).fetchone()
+
+
+def _count_model_pendencies(model: dict[str, Any] | None) -> int:
+    if model is None:
+        return 0
+    pending = 0
+    pending += _count_pending_decision(model.get("persona_json"))
+    pending += _count_pending_decision(model.get("services_json"))
+    pending += _count_pending_decision(model.get("pricing_json"))
+    if not model.get("languages"):
+        pending += 1
+    calendar_external_id = model.get("calendar_external_id")
+    if not calendar_external_id or not str(calendar_external_id).strip():
+        pending += 1
+    return pending
+
+
+def _count_pending_decision(node: Any) -> int:
+    if node is None:
+        return 0
+    if isinstance(node, str):
+        return 1 if node == "PENDING_DECISION" else 0
+    if isinstance(node, list):
+        return sum(_count_pending_decision(item) for item in node)
+    if isinstance(node, dict):
+        return sum(_count_pending_decision(value) for value in node.values())
+    return 0
+
+
 def _dashboard_queue_base_sql() -> str:
     return """
     WITH base AS (
@@ -1755,9 +2519,12 @@ def _dashboard_queue_base_sql() -> str:
         c.handoff_status,
         c.awaiting_input_type,
         c.awaiting_client_decision,
+        c.pending_action,
         c.last_handoff_at,
         c.last_message_at,
         c.created_at,
+        c.expected_amount,
+        c.urgency_profile,
         cl.display_name AS client_display_name,
         cl.whatsapp_jid AS client_identifier,
         li.latest_inbound_at,
@@ -1803,6 +2570,7 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(last_handoff_at, handoff_opened_at, last_message_at, created_at) AS relevant_at,
         CASE
           WHEN last_handoff_at IS NOT NULL THEN 'app.conversations.last_handoff_at'
@@ -1811,6 +2579,7 @@ def _dashboard_queue_base_sql() -> str:
           ELSE 'app.conversations.created_at'
         END AS age_source,
         'Handoff aberto aguardando reconhecimento ou liberacao.' AS reason,
+        'Assumir o atendimento humano e responder o lead.' AS next_best_action,
         concat('/conversas/', conversation_id::text) AS drilldown_href,
         'app.conversations + app.handoff_events' AS source,
         'all_time' AS queue_window,
@@ -1830,6 +2599,7 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(handoff_acknowledged_at, last_handoff_at, handoff_opened_at, last_message_at, created_at),
         CASE
           WHEN handoff_acknowledged_at IS NOT NULL THEN 'app.handoff_events.created_at'
@@ -1839,6 +2609,7 @@ def _dashboard_queue_base_sql() -> str:
           ELSE 'app.conversations.created_at'
         END,
         'Handoff reconhecido, mas ainda nao liberado para automacao.',
+        'Retomar a conversa humana e registrar o proximo passo.',
         concat('/conversas/', conversation_id::text),
         'app.conversations + app.handoff_events',
         'all_time',
@@ -1858,9 +2629,11 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         latest_inbound_at,
         'app.messages.direction',
         'Ultimo inbound nao tem outbound posterior registrado.',
+        COALESCE(pending_action, 'Responder a ultima mensagem e destravar a negociacao.'),
         concat('/conversas/', conversation_id::text),
         'app.messages.direction + provider_message_at/created_at',
         'latest_inbound_without_later_outbound',
@@ -1882,9 +2655,11 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         last_message_at,
         'app.conversations.last_message_at',
         'Conversa sem atividade recente por last_message_at.',
+        COALESCE(pending_action, 'Reaquecer a conversa e validar se ainda existe interesse.'),
         concat('/conversas/', conversation_id::text),
         'app.conversations.last_message_at',
         concat('last_message_at <= now() - ', %(stale_after_hours)s, 'h'),
@@ -1905,12 +2680,14 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(last_message_at, created_at),
         CASE
           WHEN last_message_at IS NOT NULL THEN 'app.conversations.last_message_at'
           ELSE 'app.conversations.created_at'
         END,
         'Flow type segue UNDETERMINED alem da janela configurada.',
+        COALESCE(pending_action, 'Classificar o lead e definir o fluxo de atendimento.'),
         concat('/conversas/', conversation_id::text),
         'app.conversations.flow_type + last_message_at/created_at',
         concat('age >= ', %(undetermined_after_hours)s, 'h'),
@@ -1931,12 +2708,14 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(last_message_at, created_at),
         CASE
           WHEN last_message_at IS NOT NULL THEN 'app.conversations.last_message_at'
           ELSE 'app.conversations.created_at'
         END,
         concat('NEGOCIANDO aguardando ', awaiting_input_type, '.'),
+        COALESCE(pending_action, 'Destravar o item pendente para seguir com a negociacao.'),
         concat('/conversas/', conversation_id::text),
         'app.conversations.state + awaiting_input_type',
         'all_time',
@@ -1958,12 +2737,14 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(last_message_at, created_at),
         CASE
           WHEN last_message_at IS NOT NULL THEN 'app.conversations.last_message_at'
           ELSE 'app.conversations.created_at'
         END,
         'Conversa marcada com awaiting_client_decision=true.',
+        COALESCE(pending_action, 'Responder o cliente e pedir a confirmacao final.'),
         concat('/conversas/', conversation_id::text),
         'app.conversations.awaiting_client_decision',
         'all_time',
@@ -1983,6 +2764,7 @@ def _dashboard_queue_base_sql() -> str:
         state,
         flow_type,
         handoff_status,
+        expected_amount,
         COALESCE(last_handoff_at, handoff_opened_at, last_message_at, created_at),
         CASE
           WHEN last_handoff_at IS NOT NULL THEN 'app.conversations.last_handoff_at'
@@ -1991,6 +2773,7 @@ def _dashboard_queue_base_sql() -> str:
           ELSE 'app.conversations.created_at'
         END,
         'Fluxo externo exige acompanhamento humano com handoff aberto.',
+        'Assumir o lead de maior valor e conduzir o handoff humano.',
         concat('/conversas/', conversation_id::text),
         'app.conversations.flow_type + handoff_status',
         'all_time',
@@ -2008,6 +2791,7 @@ def _dashboard_queue_base_sql() -> str:
       state,
       flow_type,
       handoff_status,
+      expected_amount,
       relevant_at,
       CASE
         WHEN relevant_at IS NULL THEN NULL
@@ -2015,6 +2799,7 @@ def _dashboard_queue_base_sql() -> str:
       END AS age_seconds,
       age_source,
       reason,
+      next_best_action,
       drilldown_href,
       source,
       queue_window AS "window",

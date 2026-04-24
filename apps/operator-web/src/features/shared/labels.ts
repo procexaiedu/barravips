@@ -4,7 +4,10 @@ import type {
   HandoffStatus,
   MediaApprovalStatus,
   MediaType,
+  ReceiptAnalysisStatus,
   ScheduleSlotStatus,
+  ScheduleSource,
+  UrgencyProfile,
 } from "@/contracts";
 
 export function conversationStateLabel(state: ConversationState | string): string {
@@ -42,9 +45,9 @@ export function handoffStatusLabel(status: HandoffStatus | string): string {
     case "NONE":
       return "IA atendendo";
     case "OPENED":
-      return "Aguardando modelo";
+      return "Aguardando humano";
     case "ACKNOWLEDGED":
-      return "Modelo assumiu";
+      return "Humano assumiu";
     case "RELEASED":
       return "Devolvida à IA";
     default:
@@ -74,11 +77,11 @@ export function mediaApprovalLabel(status: MediaApprovalStatus | string): string
     case "PENDING":
       return "Aguardando aprovação";
     case "APPROVED":
-      return "Aprovada";
+      return "Aprovado para uso";
     case "REJECTED":
-      return "Rejeitada";
+      return "Reprovado";
     case "REVOKED":
-      return "Revogada";
+      return "Arquivado";
     default:
       return status;
   }
@@ -96,6 +99,42 @@ export function mediaTypeLabel(type: MediaType | string): string {
       return "Documento";
     default:
       return type;
+  }
+}
+
+export function receiptAnalysisStatusLabel(status: ReceiptAnalysisStatus | string): string {
+  switch (status) {
+    case "PENDING":
+      return "Aguardando análise";
+    case "VALID":
+      return "Válido";
+    case "INVALID":
+      return "Inválido";
+    case "UNCERTAIN":
+      return "Incerto";
+    case "NEEDS_REVIEW":
+      return "Precisa revisar";
+    default:
+      return status;
+  }
+}
+
+export function mediaSendConstraintLabel(key: string): string {
+  switch (key) {
+    case "send_only_when_requested":
+      return "Enviar apenas quando solicitado";
+    case "view_once":
+      return "Visualizacao unica";
+    case "max_per_day":
+      return "Maximo por dia";
+    case "min_interval_minutes":
+      return "Intervalo minimo";
+    case "allowed_hours":
+      return "Horarios permitidos";
+    case "requires_approval":
+      return "Exige aprovacao";
+    default:
+      return key;
   }
 }
 
@@ -144,9 +183,9 @@ export function clientStatusLabel(status: string | null | undefined): string | n
 export function queueLabel(queueKey: string, fallback: string): string {
   switch (queueKey) {
     case "OPEN_HANDOFF":
-      return "Aguardando modelo assumir";
+      return "Aguardando humano assumir";
     case "ACKNOWLEDGED_HANDOFF":
-      return "Modelo precisa devolver";
+      return "Humano precisa devolver";
     case "CLIENT_WAITING_RESPONSE":
       return "Cliente sem resposta";
     case "STALE_CONVERSATION":
@@ -158,7 +197,7 @@ export function queueLabel(queueKey: string, fallback: string): string {
     case "AWAITING_CLIENT_DECISION":
       return "Cliente ainda não decidiu";
     case "EXTERNAL_OPEN_HANDOFF":
-      return "Deslocamento esperando modelo";
+      return "Deslocamento esperando humano";
     default:
       return fallback;
   }
@@ -167,9 +206,9 @@ export function queueLabel(queueKey: string, fallback: string): string {
 export function queueReason(queueKey: string, fallback: string): string {
   switch (queueKey) {
     case "OPEN_HANDOFF":
-      return "A IA transferiu e a modelo ainda não assumiu.";
+      return "A IA pediu atendimento humano e ninguém assumiu ainda.";
     case "ACKNOWLEDGED_HANDOFF":
-      return "Modelo assumiu há um tempo e ainda não devolveu para a IA.";
+      return "Um humano assumiu há um tempo e ainda não devolveu para a IA.";
     case "CLIENT_WAITING_RESPONSE":
       return "O cliente mandou mensagem e ninguém respondeu depois.";
     case "STALE_CONVERSATION":
@@ -181,25 +220,50 @@ export function queueReason(queueKey: string, fallback: string): string {
     case "AWAITING_CLIENT_DECISION":
       return "Aguardando o cliente confirmar a próxima etapa.";
     case "EXTERNAL_OPEN_HANDOFF":
-      return "Deslocamento em aberto precisa do acompanhamento da modelo.";
+      return "Deslocamento em aberto precisa de acompanhamento humano.";
     default:
       return fallback;
   }
 }
 
+const URGENCY_PROFILE_LABELS: Record<UrgencyProfile, string> = {
+  IMMEDIATE: "urgência imediata",
+  SCHEDULED: "horário agendado",
+  UNDEFINED_TIME: "sem horário definido",
+  ESTIMATED_TIME: "horário estimado",
+};
+
 export function urgencyProfileLabel(profile: string | null | undefined): string | null {
   if (!profile) return null;
-  switch (profile) {
-    case "IMMEDIATE":
-      return "urgência imediata";
-    case "HIGH":
-      return "urgência alta";
-    case "MEDIUM":
-      return "urgência média";
-    case "LOW":
-      return "urgência baixa";
+  return URGENCY_PROFILE_LABELS[profile as UrgencyProfile] ?? profile.toLowerCase();
+}
+
+const SCHEDULE_SOURCE_LABELS: Record<ScheduleSource, string> = {
+  CALENDAR_SYNC: "Google Calendar",
+  MANUAL: "Você",
+  AUTO_BLOCK: "IA (negociação)",
+};
+
+export function scheduleSourceLabel(source: string | null | undefined): string {
+  if (!source) return "—";
+  return SCHEDULE_SOURCE_LABELS[source as ScheduleSource] ?? source;
+}
+
+export function deliveryStatusLabel(status: string | null | undefined): string | null {
+  if (!status) return null;
+  switch (status.toUpperCase()) {
+    case "SENT":
+      return "enviada";
+    case "DELIVERED":
+      return "entregue";
+    case "READ":
+      return "lida";
+    case "FAILED":
+      return "falhou";
+    case "PENDING":
+      return "enviando";
     default:
-      return profile.toLowerCase();
+      return status;
   }
 }
 

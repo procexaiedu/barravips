@@ -51,7 +51,17 @@
       "Bash(node *)",
       "Bash(ls -la C:\\\\\\\\barravips/.impeccable.md)",
       "Bash(npx tsc *)",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npm.cmd run *)",
+      "Bash(python -m pytest tests/integration/test_amount_filters.py --collect-only)",
+      "Bash(python -m pytest tests/integration/test_read_models_schema.py --collect-only)",
+      "Bash(echo \"exit_status=$?\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tests/integration/test_read_models_schema.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -m pytest tests/integration/ --collect-only -q)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/api/src/barra_vips_api/main.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(python -m pytest tests/integration/test_read_models_schema.py --collect-only -q)",
+      "Bash(python -m pytest tests/integration/test_read_models_schema.py::TestDashboardSummaryRead --collect-only -q)"
     ]
   }
 }

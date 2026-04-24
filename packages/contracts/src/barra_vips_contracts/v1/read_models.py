@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -14,7 +14,14 @@ FlowType = Literal["INTERNAL", "EXTERNAL", "UNDETERMINED"]
 HandoffStatus = Literal["NONE", "OPENED", "ACKNOWLEDGED", "RELEASED"]
 ClientStatus = Literal["NEW", "RETURNING", "VIP", "BLOCKED"]
 UrgencyProfile = Literal["IMMEDIATE", "SCHEDULED", "UNDEFINED_TIME", "ESTIMATED_TIME"]
-DashboardWindowKey = Literal["requested", "today", "next_14_days", "all_time"]
+DashboardWindowKey = Literal[
+    "requested",
+    "today",
+    "last_7_days",
+    "last_30_days",
+    "next_14_days",
+    "all_time",
+]
 DashboardSampleMethod = Literal["full_aggregate"]
 MediaUsageWindowKey = Literal["requested", "all_time"]
 MediaUsageSampleMethod = Literal["full_aggregate"]
@@ -98,10 +105,12 @@ class ConversationQueueItemRead(ContractModel):
     state: ConversationState
     flow_type: FlowType
     handoff_status: HandoffStatus
+    expected_amount: Decimal | None = None
     relevant_at: datetime | None = None
     age_seconds: int | None = Field(default=None, ge=0)
     age_source: str
     reason: str
+    next_best_action: str | None = None
     drilldown_href: str
     source: str
     window: str
@@ -172,6 +181,21 @@ class HealthStatusRead(ContractModel):
     status: Literal["ok", "degraded", "down"]
     database: Literal["ok", "down"]
     checked_at: datetime
+
+
+class DashboardHealthSignalRead(ContractModel):
+    status: str
+    label: str
+    detail: str | None = None
+    checked_at: datetime
+
+
+class DashboardHealthRead(ContractModel):
+    generated_at: datetime
+    agent: DashboardHealthSignalRead
+    whatsapp: DashboardHealthSignalRead
+    calendar: DashboardHealthSignalRead
+    model: DashboardHealthSignalRead
 
 
 class AgentOpsWindowRead(ContractModel):
@@ -379,9 +403,77 @@ class DashboardCountMetric(ContractModel):
     meta: DashboardMetricMeta
 
 
+class DashboardRateMetric(ContractModel):
+    value: int = Field(ge=0, le=100)
+    meta: DashboardMetricMeta
+
+
 class DashboardBreakdownMetric(ContractModel):
     counts: dict[str, int]
     meta: DashboardMetricMeta
+
+
+class DashboardDurationMetric(ContractModel):
+    average_seconds: int | None = Field(default=None, ge=0)
+    meta: DashboardMetricMeta
+
+
+class DashboardAmountMetric(ContractModel):
+    value: Decimal = Field(default=Decimal("0"))
+    meta: DashboardMetricMeta
+
+
+class DashboardAmountBreakdownMetric(ContractModel):
+    amounts: dict[str, Decimal]
+    meta: DashboardMetricMeta
+
+
+class DashboardFinancialGrowthMetric(ContractModel):
+    current_amount: Decimal = Field(default=Decimal("0"))
+    previous_amount: Decimal = Field(default=Decimal("0"))
+    delta_percent: int | None = None
+    meta: DashboardMetricMeta
+
+
+class DashboardFinancialRateMetric(ContractModel):
+    value_percent: int | None = None
+    numerator: int = Field(default=0, ge=0)
+    denominator: int = Field(default=0, ge=0)
+    meta: DashboardMetricMeta
+
+
+class DashboardFinancialForecastMetric(ContractModel):
+    value: Decimal | None = None
+    minimum_sample_size: int = Field(default=0, ge=0)
+    meta: DashboardMetricMeta
+
+
+class FinancialTimeseriesPoint(ContractModel):
+    date: date
+    pipeline_new_amount: Decimal = Field(default=Decimal("0"))
+    detected_total_amount: Decimal = Field(default=Decimal("0"))
+    avg_ticket_amount: Decimal | None = None
+    conversions_count: int = Field(default=0, ge=0)
+    terminal_count: int = Field(default=0, ge=0)
+
+
+class DashboardFinancialTimeseriesRead(ContractModel):
+    days: int = Field(ge=7, le=90)
+    starts_at: datetime
+    ends_at: datetime
+    points: list[FinancialTimeseriesPoint]
+    meta: DashboardMetricMeta
+
+
+class DashboardFinancialRead(ContractModel):
+    open_pipeline_total: DashboardAmountMetric
+    open_pipeline_by_state: DashboardAmountBreakdownMetric
+    avg_ticket_last_7d: DashboardAmountMetric
+    detected_total_last_7d: DashboardAmountMetric
+    divergence_abs_last_7d: DashboardAmountMetric
+    pipeline_growth: DashboardFinancialGrowthMetric
+    conversion_rate_last_30d: DashboardFinancialRateMetric
+    projected_revenue: DashboardFinancialForecastMetric
 
 
 class DashboardSummaryRead(ContractModel):
@@ -402,3 +494,12 @@ class DashboardSummaryRead(ContractModel):
     schedule_slots_next_14d_by_status: DashboardBreakdownMetric
     calendar_sync_pending: DashboardCountMetric
     calendar_sync_error: DashboardCountMetric
+    ready_for_human_count: DashboardCountMetric
+    awaiting_client_decision_count: DashboardCountMetric
+    stalled_conversations_count: DashboardCountMetric
+    hot_leads_count: DashboardCountMetric
+    response_rate: DashboardRateMetric
+    qualification_rate: DashboardRateMetric
+    time_to_first_response: DashboardDurationMetric
+    conversation_funnel: DashboardBreakdownMetric
+    financial: DashboardFinancialRead

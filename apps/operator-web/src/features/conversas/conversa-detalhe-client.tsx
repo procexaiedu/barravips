@@ -7,6 +7,8 @@ import type {
   ConversationDetailRead,
   ConversationMessageRead,
   HandoffEventRead,
+  PaginatedEnvelope,
+  ReceiptRead,
 } from "@/contracts";
 import { bffFetch, type BffFetchError } from "@/features/shared/bff-client";
 import { ConfirmModal } from "@/features/shared/confirm-modal";
@@ -19,11 +21,13 @@ import {
 import {
   clientStatusLabel,
   conversationStateLabel,
+  deliveryStatusLabel,
   flowTypeLabel,
   handoffReasonLabel,
   handoffStatusLabel,
   mediaApprovalLabel,
   mediaTypeLabel,
+  receiptAnalysisStatusLabel,
   urgencyProfileLabel,
 } from "@/features/shared/labels";
 
@@ -41,6 +45,8 @@ export function ConversaDetalheClient({ conversationId }: Props) {
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [pendingRelease, setPendingRelease] = useState(false);
+  const [receipts, setReceipts] = useState<ReceiptRead[]>([]);
+  const [receiptError, setReceiptError] = useState<BffFetchError | null>(null);
 
   const load = useCallback(async () => {
     const result = await bffFetch<ConversationDetailRead>(
@@ -51,9 +57,22 @@ export function ConversaDetalheClient({ conversationId }: Props) {
     setFirstLoad(false);
   }, [conversationId]);
 
+  const loadReceipts = useCallback(async () => {
+    const params = new URLSearchParams({
+      conversation_id: conversationId,
+      page_size: "5",
+    });
+    const result = await bffFetch<PaginatedEnvelope<ReceiptRead>>(
+      `/api/operator/receipts?${params.toString()}`,
+    );
+    setReceipts(result.data?.items ?? []);
+    setReceiptError(result.error);
+  }, [conversationId]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadReceipts();
+  }, [load, loadReceipts]);
 
   useEffect(() => {
     const handoff = detail?.conversation.handoff_status;
@@ -61,9 +80,10 @@ export function ConversaDetalheClient({ conversationId }: Props) {
     const interval = active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     const id = window.setInterval(() => {
       void load();
+      void loadReceipts();
     }, interval);
     return () => window.clearInterval(id);
-  }, [detail?.conversation.handoff_status, load]);
+  }, [detail?.conversation.handoff_status, load, loadReceipts]);
 
   const onAcknowledge = useCallback(async () => {
     setBusy(true);
@@ -139,6 +159,7 @@ export function ConversaDetalheClient({ conversationId }: Props) {
   const handoff = conversation.handoff_status;
   const canAcknowledge = handoff === "OPENED";
   const canRelease = handoff === "OPENED" || handoff === "ACKNOWLEDGED";
+  const latestReceipt = receipts[0] ?? null;
 
   return (
     <div className="section-stack">
@@ -181,31 +202,7 @@ export function ConversaDetalheClient({ conversationId }: Props) {
             <dd>{conversation.client.profile_summary || "—"}</dd>
           </div>
           <div>
-            <dt>Resumo da conversa</dt>
-            <dd>{conversation.summary || "—"}</dd>
-          </div>
-          <div>
-            <dt>Próximo passo da IA</dt>
-            <dd>{conversation.pending_action || "—"}</dd>
-          </div>
-          <div>
-            <dt>IA esperando do cliente</dt>
-            <dd>{conversation.awaiting_input_type || "—"}</dd>
-          </div>
-          <div>
-            <dt>Cliente precisa responder</dt>
-            <dd>{conversation.awaiting_client_decision ? "sim" : "não"}</dd>
-          </div>
-          <div>
-            <dt>Urgência</dt>
-            <dd>{urgencyProfileLabel(conversation.urgency_profile) || "—"}</dd>
-          </div>
-          <div>
-            <dt>Valor combinado</dt>
-            <dd>{formatCurrency(conversation.expected_amount)}</dd>
-          </div>
-          <div>
-            <dt>Última transferência</dt>
+            <dt>Último atendimento humano</dt>
             <dd>{formatDateTime(conversation.last_handoff_at)}</dd>
           </div>
           <div>
@@ -236,6 +233,41 @@ export function ConversaDetalheClient({ conversationId }: Props) {
         </div>
       </section>
 
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Contexto</h2>
+          <div className="inline-actions">
+            {urgencyProfileLabel(conversation.urgency_profile) ? (
+              <span className="chip warning">{urgencyProfileLabel(conversation.urgency_profile)}</span>
+            ) : null}
+            {conversation.expected_amount ? (
+              <span className="chip">valor combinado {formatCurrency(conversation.expected_amount)}</span>
+            ) : null}
+          </div>
+        </div>
+        <div className="context-summary">
+          <SummaryText value={conversation.summary} />
+          <dl className="kv-list">
+            <div>
+              <dt>Próximo passo</dt>
+              <dd>{conversation.pending_action || "—"}</dd>
+            </div>
+            <div>
+              <dt>IA esperando</dt>
+              <dd>{conversation.awaiting_input_type || "—"}</dd>
+            </div>
+            <div>
+              <dt>Cliente precisa responder</dt>
+              <dd>{conversation.awaiting_client_decision ? "sim" : "não"}</dd>
+            </div>
+            <div>
+              <dt>Valor esperado</dt>
+              <dd>{formatCurrency(conversation.expected_amount)}</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
       <div className="detail-grid">
         <section className="panel">
           <div className="panel-heading">
@@ -254,6 +286,16 @@ export function ConversaDetalheClient({ conversationId }: Props) {
         </section>
 
         <div className="section-stack">
+          {latestReceipt || receiptError ? (
+            <ReceiptPanel
+              conversationId={conversation.id}
+              expectedAmount={conversation.expected_amount}
+              receipt={latestReceipt}
+              total={receipts.length}
+              error={receiptError}
+            />
+          ) : null}
+
           <section className="panel">
             <div className="panel-heading">
               <h2>Última resposta da IA</h2>
@@ -291,11 +333,11 @@ export function ConversaDetalheClient({ conversationId }: Props) {
 
           <section className="panel">
             <div className="panel-heading">
-              <h2>Histórico de transferências</h2>
+              <h2>Histórico de atendimento humano</h2>
               <span className="badge muted">{detail.handoff_events.length}</span>
             </div>
             {detail.handoff_events.length === 0 ? (
-              <p className="empty-state">Nunca foi transferida — a IA atendeu o tempo todo.</p>
+              <p className="empty-state">Nunca precisou de atendimento humano — a IA atendeu o tempo todo.</p>
             ) : (
               <div className="stack-sm">
                 {detail.handoff_events.map((event, index) => (
@@ -383,26 +425,125 @@ export function ConversaDetalheClient({ conversationId }: Props) {
   );
 }
 
+function SummaryText({ value }: { value: string | null | undefined }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!value) {
+    return <p className="context-summary-text empty-state">Sem resumo registrado para esta conversa.</p>;
+  }
+  const shouldTruncate = value.length > 220;
+  const visible = !expanded && shouldTruncate ? `${value.slice(0, 220).trim()}...` : value;
+  return (
+    <div className="context-summary-text">
+      <p>{visible}</p>
+      {shouldTruncate ? (
+        <button className="inline-text-button" type="button" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "ver menos" : "ver mais"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ReceiptPanel({
+  conversationId,
+  expectedAmount,
+  receipt,
+  total,
+  error,
+}: {
+  conversationId: string;
+  expectedAmount: string | number | null | undefined;
+  receipt: ReceiptRead | null;
+  total: number;
+  error: BffFetchError | null;
+}) {
+  const receiptExpectedAmount = receipt?.expected_amount ?? expectedAmount;
+  const amountMismatch = receipt ? amountsDiverge(receipt.detected_amount, receiptExpectedAmount) : false;
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>Comprovante</h2>
+        <span className={error ? "badge danger" : "badge muted"}>
+          {error ? "erro" : total > 1 ? `${total} itens` : "vinculado"}
+        </span>
+      </div>
+      {error ? (
+        <p className="panel-notice">{error.message}</p>
+      ) : receipt ? (
+        <div className="stack-sm">
+          <dl className="kv-list">
+            <div>
+              <dt>Detectado</dt>
+              <dd className={amountMismatch ? "receipt-amount danger" : "receipt-amount"}>
+                {formatCurrency(receipt.detected_amount)}
+              </dd>
+            </div>
+            <div>
+              <dt>Esperado</dt>
+              <dd className={amountMismatch ? "receipt-amount danger" : "receipt-amount"}>
+                {formatCurrency(receiptExpectedAmount)}
+              </dd>
+            </div>
+            <div>
+              <dt>Análise</dt>
+              <dd>
+                <ReceiptAnalysisBadge status={receipt.analysis_status} />
+              </dd>
+            </div>
+            <div>
+              <dt>Revisão humana</dt>
+              <dd>
+                <span className={receipt.needs_review ? "chip warning" : "chip"}>
+                  {receipt.needs_review ? "precisa revisar" : "sem pendência"}
+                </span>
+              </dd>
+            </div>
+          </dl>
+          {amountMismatch ? (
+            <p className="panel-notice warning">Valor detectado diferente do valor esperado.</p>
+          ) : null}
+          <Link className="link-pill" href={`/comprovantes?conversation_id=${encodeURIComponent(conversationId)}`}>
+            Abrir comprovantes
+          </Link>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ReceiptAnalysisBadge({ status }: { status: ReceiptRead["analysis_status"] }) {
+  if (status === "INVALID") {
+    return <span className="badge danger">{receiptAnalysisStatusLabel(status)}</span>;
+  }
+  if (status === "PENDING" || status === "UNCERTAIN" || status === "NEEDS_REVIEW") {
+    return <span className="badge warning">{receiptAnalysisStatusLabel(status)}</span>;
+  }
+  return <span className="badge ok">{receiptAnalysisStatusLabel(status)}</span>;
+}
+
 function MessageEntry({ message }: { message: ConversationMessageRead }) {
   const roleClass = `timeline-entry role-${message.role}`;
   const directionArrow = message.direction === "INBOUND" ? "←" : "→";
   const directionLabel = message.direction === "INBOUND" ? "cliente" : "modelo";
+  const deliveryLabel =
+    message.direction === "OUTBOUND" ? deliveryStatusLabel(message.delivery_status) : null;
   return (
     <article className={roleClass}>
       <header>
-        <span>
-          {directionArrow} {directionLabel} · {messageTypeLabel(message.message_type)}
+        <span className="timeline-meta">
+          <span className="message-type-icon" title={messageTypeLabel(message.message_type)} aria-hidden="true">
+            {messageTypeIcon(message.message_type)}
+          </span>
+          {directionArrow} {directionLabel}
         </span>
         <span>{formatDateTime(message.created_at)}</span>
       </header>
       <p>{message.content_text ?? "(sem texto)"}</p>
-      {message.delivery_status || message.trace_id ? (
+      {deliveryLabel ? (
         <div className="inline-actions" style={{ marginTop: 6, flexWrap: "wrap" }}>
-          {message.delivery_status ? (
-            <span className="chip" title="Situação do envio no WhatsApp">
-              {deliveryStatusLabel(message.delivery_status)}
-            </span>
-          ) : null}
+          <span className={deliveryStatusChipClass(message.delivery_status)} title="Situação do envio no WhatsApp">
+            {deliveryLabel}
+          </span>
         </div>
       ) : null}
     </article>
@@ -490,29 +631,63 @@ function messageTypeLabel(type: string): string {
   }
 }
 
-function deliveryStatusLabel(status: string): string {
-  switch (status.toUpperCase()) {
-    case "SENT":
-      return "enviada";
-    case "DELIVERED":
-      return "entregue";
-    case "READ":
-      return "lida";
-    case "FAILED":
-      return "falhou";
-    case "PENDING":
-      return "enviando";
+function messageTypeIcon(type: string): string {
+  switch (type) {
+    case "image":
+      return "▧";
+    case "audio":
+      return "♪";
+    case "video":
+      return "▶";
+    case "document":
+      return "▤";
+    case "system":
+      return "*";
     default:
-      return status;
+      return "T";
   }
+}
+
+function deliveryStatusChipClass(status: string | null): string {
+  switch (status?.toUpperCase()) {
+    case "FAILED":
+      return "chip danger";
+    case "PENDING":
+      return "chip warning";
+    case "READ":
+    case "DELIVERED":
+      return "chip gold";
+    default:
+      return "chip";
+  }
+}
+
+function amountsDiverge(
+  detected: string | number | null | undefined,
+  expected: string | number | null | undefined,
+): boolean {
+  const detectedNumber = parseAmount(detected);
+  const expectedNumber = parseAmount(expected);
+  if (detectedNumber === null || expectedNumber === null) {
+    return false;
+  }
+  return detectedNumber !== expectedNumber;
+}
+
+function parseAmount(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = typeof value === "number" ? value : Number(value.replace(",", "."));
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function handoffEventLabel(eventType: string): string {
   switch (eventType) {
     case "handoff_opened":
-      return "IA transferiu para a modelo";
+      return "IA pediu atendimento humano";
     case "handoff_acknowledged":
-      return "Modelo assumiu";
+      return "Humano assumiu";
     case "handoff_released":
       return "Devolvida para a IA";
     default:

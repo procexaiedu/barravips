@@ -77,7 +77,13 @@ export type AgentOpsWindowKey = "requested";
 
 export type AgentOpsSampleMethod = "full_aggregate";
 
-export type DashboardWindowKey = "requested" | "today" | "next_14_days" | "all_time";
+export type DashboardWindowKey =
+  | "requested"
+  | "today"
+  | "last_7_days"
+  | "last_30_days"
+  | "next_14_days"
+  | "all_time";
 
 export type DashboardSampleMethod = "full_aggregate";
 
@@ -193,10 +199,12 @@ export type ConversationQueueItemRead = {
   state: ConversationState;
   flow_type: FlowType;
   handoff_status: HandoffStatus;
+  expected_amount?: string | number | null;
   relevant_at: string | null;
   age_seconds: number | null;
   age_source: string;
   reason: string;
+  next_best_action: string | null;
   drilldown_href: string;
   source: string;
   window: string;
@@ -352,6 +360,21 @@ export type HealthStatusRead = {
   checked_at: string;
 };
 
+export type DashboardHealthSignalRead = {
+  status: string;
+  label: string;
+  detail: string | null;
+  checked_at: string;
+};
+
+export type DashboardHealthRead = {
+  generated_at: string;
+  agent: DashboardHealthSignalRead;
+  whatsapp: DashboardHealthSignalRead;
+  calendar: DashboardHealthSignalRead;
+  model: DashboardHealthSignalRead;
+};
+
 export type EvolutionStatusRead = {
   provider: "evolution";
   instance: string;
@@ -450,9 +473,77 @@ export type DashboardCountMetric = {
   meta: DashboardMetricMeta;
 };
 
+export type DashboardRateMetric = {
+  value: number;
+  meta: DashboardMetricMeta;
+};
+
 export type DashboardBreakdownMetric = {
   counts: Record<string, number>;
   meta: DashboardMetricMeta;
+};
+
+export type DashboardDurationMetric = {
+  average_seconds: number | null;
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardAmountMetric = {
+  value: string | number;
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardAmountBreakdownMetric = {
+  amounts: Record<string, string | number>;
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardFinancialGrowthMetric = {
+  current_amount: string | number;
+  previous_amount: string | number;
+  delta_percent: number | null;
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardFinancialRateMetric = {
+  value_percent: number | null;
+  numerator: number;
+  denominator: number;
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardFinancialForecastMetric = {
+  value: string | number | null;
+  minimum_sample_size: number;
+  meta: DashboardMetricMeta;
+};
+
+export type FinancialTimeseriesPoint = {
+  date: string;
+  pipeline_new_amount: string | number;
+  detected_total_amount: string | number;
+  avg_ticket_amount: string | number | null;
+  conversions_count: number;
+  terminal_count: number;
+};
+
+export type DashboardFinancialTimeseriesRead = {
+  days: number;
+  starts_at: string;
+  ends_at: string;
+  points: FinancialTimeseriesPoint[];
+  meta: DashboardMetricMeta;
+};
+
+export type DashboardFinancialRead = {
+  open_pipeline_total: DashboardAmountMetric;
+  open_pipeline_by_state: DashboardAmountBreakdownMetric;
+  avg_ticket_last_7d: DashboardAmountMetric;
+  detected_total_last_7d: DashboardAmountMetric;
+  divergence_abs_last_7d: DashboardAmountMetric;
+  pipeline_growth: DashboardFinancialGrowthMetric;
+  conversion_rate_last_30d: DashboardFinancialRateMetric;
+  projected_revenue: DashboardFinancialForecastMetric;
 };
 
 export type DashboardSummaryRead = {
@@ -473,6 +564,15 @@ export type DashboardSummaryRead = {
   schedule_slots_next_14d_by_status: DashboardBreakdownMetric;
   calendar_sync_pending: DashboardCountMetric;
   calendar_sync_error: DashboardCountMetric;
+  ready_for_human_count: DashboardCountMetric;
+  awaiting_client_decision_count: DashboardCountMetric;
+  stalled_conversations_count: DashboardCountMetric;
+  hot_leads_count: DashboardCountMetric;
+  response_rate: DashboardRateMetric;
+  qualification_rate: DashboardRateMetric;
+  time_to_first_response: DashboardDurationMetric;
+  conversation_funnel: DashboardBreakdownMetric;
+  financial: DashboardFinancialRead;
 };
 
 export type HandoffSummaryWindowRead = {

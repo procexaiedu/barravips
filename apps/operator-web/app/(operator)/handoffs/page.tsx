@@ -5,8 +5,9 @@ export default function HandoffsPage() {
   return (
     <section className="page-stack">
       <PageHeader
-        title="Transferências"
-        description="Conversas em que a IA saiu e a modelo precisa assumir. Devolver para a IA pede confirmação."
+        title="Leads para assumir"
+        description="Fila de atendimento humano com motivo, urgência, SLA e ação direta para assumir o lead."
+        eyebrow="Operação · Atendimento humano"
       />
       <HandoffsClient />
     </section>

@@ -6,7 +6,8 @@ export default function ConversasPage() {
     <section className="page-stack">
       <PageHeader
         title="Conversas"
-        description="Todos os clientes que falaram com a modelo. Filtre por situação ou busque pelo nome para abrir a conversa completa."
+        description="Caixa de entrada comercial para priorizar leads, abrir contexto e decidir o próximo passo com poucos cliques."
+        eyebrow="Operação · Inbox comercial"
       />
       <ConversasClient />
     </section>

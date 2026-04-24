@@ -5,8 +5,9 @@ export default function StatusPage() {
   return (
     <section className="page-stack">
       <PageHeader
-        title="Status do sistema"
-        description="Saúde técnica do backend, do WhatsApp e da agenda. Integrações sem verificação real não são mostradas como saudáveis."
+        title="Saúde da operação"
+        description="Integrações e canais que mantêm o agente no ar. Conexões sem verificação real não aparecem como saudáveis."
+        eyebrow="Configuração · Saúde da operação"
       />
       <StatusClient />
     </section>

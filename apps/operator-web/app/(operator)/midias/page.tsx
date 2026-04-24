@@ -5,8 +5,9 @@ export default function MidiasPage() {
   return (
     <section className="page-stack">
       <PageHeader
-        title="Fotos e mídias"
-        description="Envie fotos, áudios e vídeos da modelo, aprove o que a IA pode mandar para os clientes e ajuste as categorias."
+        title="Biblioteca de materiais"
+        description="Arquivos comerciais que o agente pode usar nas conversas, com categoria, instrução de uso e aprovação."
+        eyebrow="Conteúdo · Materiais"
       />
       <MidiasClient />
     </section>

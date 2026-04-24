@@ -6,7 +6,8 @@ export default function AgendaPage() {
     <section className="page-stack">
       <PageHeader
         title="Agenda"
-        description="Horários da modelo organizados por dia. Bloqueie manualmente períodos em que ela não vai atender."
+        description="Disponibilidade semanal, reservas, bloqueios e sincronização que determinam se o agente pode oferecer horários."
+        eyebrow="Operação · Agenda"
       />
       <AgendaClient />
     </section>

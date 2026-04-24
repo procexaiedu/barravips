@@ -11,7 +11,7 @@ export default async function ConversaDetalhePage({
     <section className="page-stack">
       <PageHeader
         title="Conversa"
-        description="Histórico completo de mensagens, situação atual, transferências para a modelo e mídias enviadas."
+        description="Histórico completo de mensagens, situação atual, atendimento humano e mídias enviadas."
       />
       <ConversaDetalheClient conversationId={id} />
     </section>
