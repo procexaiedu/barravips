@@ -31,6 +31,11 @@ class Settings:
     evolution_outbound_timeout_seconds: float = float(
         os.getenv("EVOLUTION_OUTBOUND_TIMEOUT_SECONDS", "15")
     )
+    evolution_allowed_remote_jids: tuple[str, ...] = tuple(
+        jid.strip()
+        for jid in os.getenv("EVOLUTION_ALLOWED_REMOTE_JIDS", "").split(",")
+        if jid.strip()
+    )
     calendar_instance: str = os.getenv("CALENDAR_INSTANCE", "default")
     media_storage_dir: Path = Path(os.getenv("MEDIA_STORAGE_DIR", "storage/media"))
     max_media_upload_bytes: int = int(os.getenv("MAX_MEDIA_UPLOAD_BYTES", "0"))

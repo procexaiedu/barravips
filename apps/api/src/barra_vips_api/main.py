@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -164,6 +164,11 @@ def create_app() -> FastAPI:
     )
     app.include_router(api)
     app.include_router(webhooks)
+    # Alias historico: a Evolution v2 desta operacao foi configurada apontando
+    # para POST /webhook (singular, sem sufixo). Mantemos /webhooks/evolution
+    # como rota canonica e expomos /webhook reusando o mesmo handler para nao
+    # quebrar a config ja em uso por outras pessoas da operacao.
+    app.add_api_route("/webhook", evolution_webhook, methods=["POST"])
     return app
 
 
@@ -2712,6 +2717,7 @@ webhooks = APIRouter(prefix="/webhooks")
 
 @webhooks.post("/evolution")
 def evolution_webhook(
+    background_tasks: BackgroundTasks,
     payload: dict[str, Any] = Body(...),
     apikey: Annotated[str | None, Header()] = None,
     conn: Connection[dict[str, Any]] = Depends(get_conn),
@@ -2723,7 +2729,7 @@ def evolution_webhook(
     if event == "connection.update":
         return _process_connection_update(conn, payload)
     if event == "messages.upsert":
-        return _process_message_upsert(conn, payload)
+        return _process_message_upsert(conn, payload, background_tasks=background_tasks)
     if event in {"qrcode.updated", "QRCODE_UPDATED"}:
         return _process_qrcode_update(conn, payload)
     if event == "messages.update":
@@ -3799,14 +3805,58 @@ def _process_qrcode_update(conn: Connection[dict[str, Any]], payload: dict[str, 
     return {"status": "processed", "event": payload.get("event"), "integration_status": "QR_REQUIRED"}
 
 
-def _process_message_upsert(conn: Connection[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+def _process_message_upsert(
+    conn: Connection[dict[str, Any]],
+    payload: dict[str, Any],
+    *,
+    background_tasks: BackgroundTasks | None = None,
+) -> dict[str, Any]:
     parsed = EvolutionMessagesUpsert.model_validate(payload)
     external_message_id = parsed.data.key.id
+    # Fase 6: filtra mensagens enviadas pelo proprio numero (from_me=true).
+    # O agente so deve ser disparado por mensagens INBOUND do cliente; mensagens
+    # outbound (operador respondendo manualmente, eco da Evolution) sao
+    # persistidas para auditoria mas nao reentram no grafo.
+    if parsed.data.key.from_me:
+        raw = _insert_raw_event(
+            conn,
+            provider="evolution",
+            payload=payload,
+            external_message_id=external_message_id,
+            external_event_id=external_message_id,
+            remote_jid=parsed.data.key.remote_jid,
+            processing_status="SKIPPED",
+        )
+        return {
+            "status": "skipped",
+            "reason": "outbound",
+            "raw_event_id": raw["id"],
+        }
+    # Allowlist de remoteJids: quando configurada, mensagens fora da lista sao
+    # persistidas para auditoria mas nao despacham para o agente. Lista vazia =
+    # sem filtro. Util para restringir o agente a um unico grupo no MVP.
+    allowlist = settings.evolution_allowed_remote_jids
+    if allowlist and parsed.data.key.remote_jid not in allowlist:
+        raw = _insert_raw_event(
+            conn,
+            provider="evolution",
+            payload=payload,
+            external_message_id=external_message_id,
+            external_event_id=external_message_id,
+            remote_jid=parsed.data.key.remote_jid,
+            processing_status="SKIPPED",
+        )
+        return {
+            "status": "skipped",
+            "reason": "remote_jid_not_allowed",
+            "raw_event_id": raw["id"],
+        }
     raw = _insert_raw_event(
         conn,
         provider="evolution",
         payload=payload,
         external_message_id=external_message_id,
+        external_event_id=external_message_id,
         remote_jid=parsed.data.key.remote_jid,
         processing_status="RECEIVED",
     )
@@ -3879,11 +3929,48 @@ def _process_message_upsert(conn: Connection[dict[str, Any]], payload: dict[str,
         """,
         {"id": raw["id"], "status": "PROCESSED" if inserted else "SKIPPED"},
     )
+    if inserted and background_tasks is not None:
+        background_tasks.add_task(
+            _dispatch_inbound_to_agent,
+            str(conversation["id"]),
+            normalized.text or "",
+            normalized.message_type,
+            normalized.external_message_id,
+            str(normalized.trace_id),
+        )
     return {
         "status": "processed" if inserted else "duplicate",
         "conversation_id": conversation["id"],
         "message_id": inserted["id"] if inserted else None,
     }
+
+
+async def _dispatch_inbound_to_agent(
+    conversation_id: str,
+    text: str,
+    message_type: str,
+    external_message_id: str | None,
+    trace_id: str,
+) -> None:
+    """Background task: empilha a mensagem no DebounceManager.
+
+    Roda apos o webhook responder 200 (FastAPI BackgroundTasks). Falhas sao
+    logadas e nao re-elevadas — webhook ja respondeu OK ao Evolution e nao
+    queremos retry no nivel HTTP.
+    """
+    from barra_vips_agent.debounce import (
+        BufferedMessage,
+        get_debounce_manager,
+    )
+
+    manager = get_debounce_manager()
+    msg = BufferedMessage(
+        text=text,
+        message_type=message_type,
+        external_message_id=external_message_id,
+        from_me=False,
+    )
+    await manager.submit(conversation_id, msg, trace_id)
 
 
 def _insert_raw_event(
@@ -3892,6 +3979,7 @@ def _insert_raw_event(
     provider: str,
     payload: dict[str, Any],
     external_message_id: str | None = None,
+    external_event_id: str | None = None,
     remote_jid: str | None = None,
     processing_status: str,
     extra_redacted_keys: frozenset[str] | None = None,
@@ -3903,11 +3991,13 @@ def _insert_raw_event(
         row = conn.execute(
             """
             INSERT INTO app.raw_webhook_events (
-              provider, event_name, instance, external_message_id, remote_jid,
+              provider, event_name, instance, external_message_id,
+              external_event_id, remote_jid,
               payload_sanitized_json, processing_status
             ) VALUES (
               %(provider)s, %(event_name)s, %(instance)s, %(external_message_id)s,
-              %(remote_jid)s, %(payload)s, %(processing_status)s
+              %(external_event_id)s, %(remote_jid)s,
+              %(payload)s, %(processing_status)s
             )
             ON CONFLICT (provider, external_message_id) WHERE external_message_id IS NOT NULL
             DO NOTHING
@@ -3918,6 +4008,7 @@ def _insert_raw_event(
                 "event_name": event_name,
                 "instance": instance,
                 "external_message_id": external_message_id,
+                "external_event_id": external_event_id,
                 "remote_jid": remote_jid,
                 "payload": Jsonb(sanitized),
                 "processing_status": processing_status,
@@ -3937,11 +4028,11 @@ def _insert_raw_event(
     return conn.execute(
         """
         INSERT INTO app.raw_webhook_events (
-          provider, event_name, instance, remote_jid, payload_sanitized_json,
-          processing_status
+          provider, event_name, instance, external_event_id, remote_jid,
+          payload_sanitized_json, processing_status
         ) VALUES (
-          %(provider)s, %(event_name)s, %(instance)s, %(remote_jid)s,
-          %(payload)s, %(processing_status)s
+          %(provider)s, %(event_name)s, %(instance)s, %(external_event_id)s,
+          %(remote_jid)s, %(payload)s, %(processing_status)s
         )
         RETURNING id, trace_id
         """,
@@ -3949,6 +4040,7 @@ def _insert_raw_event(
             "provider": provider,
             "event_name": event_name,
             "instance": instance,
+            "external_event_id": external_event_id,
             "remote_jid": remote_jid,
             "payload": Jsonb(sanitized),
             "processing_status": processing_status,

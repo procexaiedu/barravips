@@ -168,6 +168,84 @@ class TestUnsupportedEvents:
         assert response.json()["status"] == "skipped"
 
 
+class TestWebhookAliasPath:
+    """Alias /webhook reusa o handler de /webhooks/evolution para preservar
+    compatibilidade com a config ja existente na Evolution desta operacao."""
+
+    def test_alias_processes_messages_upsert(self, client, evolution_headers):
+        external_id = f"MSG_TEST_{uuid.uuid4().hex}"
+        response = client.post(
+            "/webhook",
+            headers=evolution_headers,
+            json=_build_messages_upsert(external_id=external_id),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "processed"
+        assert _count_messages_with_external_id(external_id) == 1
+
+    def test_alias_rejects_invalid_secret(self, client):
+        response = client.post(
+            "/webhook",
+            headers={"apikey": "wrong-secret"},
+            json=_build_messages_upsert(external_id=f"MSG_TEST_{uuid.uuid4().hex}"),
+        )
+        assert response.status_code == 401
+
+
+class TestRemoteJidAllowlist:
+    """Quando EVOLUTION_ALLOWED_REMOTE_JIDS esta configurado, mensagens fora da
+    lista sao persistidas como SKIPPED e nao despacham para o agente."""
+
+    def test_message_outside_allowlist_is_skipped(self, client, evolution_headers, monkeypatch):
+        from barra_vips_api import main as api_main
+
+        allowed_jid = "120363000000000000@g.us"
+        monkeypatch.setattr(
+            api_main.settings,
+            "evolution_allowed_remote_jids",
+            (allowed_jid,),
+        )
+        external_id = f"MSG_TEST_{uuid.uuid4().hex}"
+        payload = _build_messages_upsert(
+            external_id=external_id,
+            remote_jid="5521988887777@s.whatsapp.net",
+        )
+        response = client.post(
+            "/webhooks/evolution",
+            headers=evolution_headers,
+            json=payload,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "skipped"
+        assert body["reason"] == "remote_jid_not_allowed"
+        assert _count_messages_with_external_id(external_id) == 0
+        assert _count_raw_events_with_external_id(external_id) == 1
+
+    def test_message_inside_allowlist_is_processed(self, client, evolution_headers, monkeypatch):
+        from barra_vips_api import main as api_main
+
+        allowed_jid = "120363111111111111@g.us"
+        monkeypatch.setattr(
+            api_main.settings,
+            "evolution_allowed_remote_jids",
+            (allowed_jid,),
+        )
+        external_id = f"MSG_TEST_{uuid.uuid4().hex}"
+        payload = _build_messages_upsert(
+            external_id=external_id,
+            remote_jid=allowed_jid,
+        )
+        response = client.post(
+            "/webhooks/evolution",
+            headers=evolution_headers,
+            json=payload,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "processed"
+        assert _count_messages_with_external_id(external_id) == 1
+
+
 class TestSanitization:
     def test_base64_and_thumbnails_are_stripped(self, client, evolution_headers):
         external_id = f"MSG_TEST_{uuid.uuid4().hex}"
