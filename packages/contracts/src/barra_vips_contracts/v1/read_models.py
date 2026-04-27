@@ -64,6 +64,15 @@ class EscortRead(ContractModel):
     languages: list[str]
     calendar_external_id: str | None = None
     photo_main_path: str | None = None
+    min_duration_minutes: int | None = Field(default=None, gt=0)
+    advance_booking_minutes: int | None = Field(default=None, ge=0)
+    max_bookings_per_day: int | None = Field(default=None, gt=0)
+    preferences_json: dict[str, str] = Field(default_factory=dict)
+    place_name: str | None = None
+    place_address: str | None = None
+    place_reference_points: str | None = None
+    accepts_displacement: bool = False
+    displacement_fee_cents: int | None = Field(default=None, ge=0)
     created_at: datetime
     updated_at: datetime
 
@@ -78,32 +87,9 @@ class EscortServiceRead(ContractModel):
     sort_order: int = 0
 
 
-class EscortLocationRead(ContractModel):
-    id: UUID
-    city: str
-    neighborhood: str | None = None
-    accepts_displacement: bool = False
-    displacement_fee_cents: int | None = Field(default=None, ge=0)
-    sort_order: int = 0
-
-
-class EscortPreferenceRead(ContractModel):
-    key: str
-    value: str
-
-
-class EscortAvailabilityRead(ContractModel):
-    min_duration_minutes: int | None = Field(default=None, gt=0)
-    advance_booking_minutes: int | None = Field(default=None, ge=0)
-    max_bookings_per_day: int | None = Field(default=None, gt=0)
-
-
 class EscortDetailRead(ContractModel):
     escort: EscortRead
     services: list[EscortServiceRead] = Field(default_factory=list)
-    locations: list[EscortLocationRead] = Field(default_factory=list)
-    preferences: list[EscortPreferenceRead] = Field(default_factory=list)
-    availability: EscortAvailabilityRead
 
 
 class LastMessageRead(ContractModel):

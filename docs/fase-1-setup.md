@@ -270,11 +270,9 @@ Catalogo (servicos, locais, preferencias, agenda) nao deve ser hardcoded na apli
 
 Campos ja modelados para isso (migrations 005 e 006):
 
-- `app.escorts`: identidade (nome, idiomas, calendar, status, foto principal).
+- `app.escorts`: identidade (nome, idiomas, calendar, status, foto principal), regras de booking (`min_duration_minutes`, `advance_booking_minutes`, `max_bookings_per_day`) e `preferences_json` (chave/valor consolidado em jsonb).
 - `app.escort_services`: servicos com duracao e preco em centavos.
 - `app.escort_locations`: cidades, bairros, taxa de deslocamento.
-- `app.escort_preferences`: chave/valor discretos para restricoes objetivas.
-- `app.escort_availability`: duracao minima, antecedencia minima, maximo por dia (1:1 com `app.escorts`).
 - `app.schedule_slots.model_id`: agenda e bloqueios por acompanhante (coluna mantem nome legado mas referencia `app.escorts`).
 - `app.media_assets.model_id`: midias vinculadas a acompanhante (coluna mantem nome legado mas referencia `app.escorts`).
 - `app.conversations.model_id`: conversa sempre ligada a uma acompanhante (coluna mantem nome legado mas referencia `app.escorts`).

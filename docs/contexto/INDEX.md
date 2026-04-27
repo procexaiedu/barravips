@@ -114,7 +114,7 @@ Para alteracoes de codigo, leia sempre os documentos `00`, `01`, `03`, `04`, `05
 - **Caminho relativo:** `05-estado-memoria-e-modelo-de-dados.md`
 - **Titulo ou assunto principal:** Estado, memoria e modelo de dados.
 - **Resumo:** E a principal referencia para estados conversacionais, memoria curta/longa e modelo relacional do MVP. Define entidades, tabelas canonicas, invariantes, indices e relacao com LangGraph/PostgresSaver.
-- **Principais topicos:** estados `NOVO`, `QUALIFICANDO`, `NEGOCIANDO`, `CONFIRMADO`, `ESCALADO`; `flow_type`; campos operacionais; cliente recorrente; entidades minimas; tabelas `app.clients`, `app.escorts`, `app.escort_services`, `app.escort_locations`, `app.escort_preferences`, `app.escort_availability`, `app.conversations`, `app.messages`, `app.raw_webhook_events`, `app.handoff_events`, `app.integration_status`, `app.media_assets`, `app.receipts`, `app.schedule_slots`, `logs.agent_executions`.
+- **Principais topicos:** estados `NOVO`, `QUALIFICANDO`, `NEGOCIANDO`, `CONFIRMADO`, `ESCALADO`; `flow_type`; campos operacionais; cliente recorrente; entidades minimas; tabelas `app.clients`, `app.escorts`, `app.escort_services`, `app.escort_locations`, `app.conversations`, `app.messages`, `app.raw_webhook_events`, `app.handoff_events`, `app.integration_status`, `app.media_assets`, `app.receipts`, `app.schedule_slots`, `logs.agent_executions`.
 - **Quando consultar:** ao criar migrations, contratos Pydantic/JSON, tools do agente, read models, persistencia, memoria, checkpoints, locks ou logs.
 - **Relacoes:** base tecnica para [06](06-arquitetura-stack-e-repositorio.md), [08](08-interface-operacional-e-api.md), [09](09-handoff-seguranca-e-robustez-operacional.md) e [10](10-observabilidade-testes-e-producao-assistida.md).
 

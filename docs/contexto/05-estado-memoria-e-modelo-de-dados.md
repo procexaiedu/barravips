@@ -217,6 +217,8 @@ A operacao mantem o catalogo das acompanhantes em tabelas normalizadas. A engenh
 - `languages` (text[])
 - `calendar_external_id`
 - `photo_main_path`
+- `min_duration_minutes`, `advance_booking_minutes`, `max_bookings_per_day` (regras de booking; nullable). Originalmente em `app.escort_availability` (1:1), inlinadas na migration 006.
+- `preferences_json` (jsonb, default `{}`). Originalmente em `app.escort_preferences` (EAV key/value), consolidada em jsonb na migration 006.
 - `created_at`
 - `updated_at`
 
@@ -236,8 +238,6 @@ Tabelas filhas (todas com FK `escort_id REFERENCES app.escorts(id) ON DELETE CAS
 
 - `app.escort_services`: `id, name, description, duration_minutes, price_cents, restrictions, sort_order`. Cada linha e um servico ofertado pela acompanhante.
 - `app.escort_locations`: `id, city, neighborhood, accepts_displacement, displacement_fee_cents, sort_order`. Cidades atendidas e taxa de deslocamento.
-- `app.escort_preferences`: `id, key, value` (UNIQUE em `escort_id, key`). Restricoes objetivas em chave/valor.
-- `app.escort_availability`: 1:1 com `app.escorts` (`escort_id PRIMARY KEY`). Campos `min_duration_minutes`, `advance_booking_minutes`, `max_bookings_per_day`.
 
 A camada de tool do agente le esse catalogo via API; o prompt nao recebe JSONB livre.
 

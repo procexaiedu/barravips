@@ -24,7 +24,6 @@ from barra_vips_contracts.v1 import (
     DashboardHealthRead,
     DashboardFinancialTimeseriesRead,
     DashboardSummaryRead,
-    EscortAvailabilityRead,
     EscortDetailRead,
     EscortRead,
     EvolutionConnectionUpdate,
@@ -54,7 +53,7 @@ from barra_vips_contracts.v1 import (
 from .config import settings
 from .db import get_conn
 from .evolution_client import EvolutionClient, EvolutionClientError, get_evolution_client
-from .media import MIME_EXTENSIONS, MEDIA_TYPES, detect_mime, ensure_inside
+from .media import MEDIA_TAG_VALUES, MEDIA_TAGS, MIME_EXTENSIONS, MEDIA_TYPES, detect_mime, ensure_inside
 from .qr_buffer import qr_buffer
 
 
@@ -95,6 +94,15 @@ class EscortPatchRequest(BaseModel):
     languages: list[str] | None = None
     calendar_external_id: str | None = None
     photo_main_path: str | None = None
+    min_duration_minutes: int | None = Field(default=None, gt=0)
+    advance_booking_minutes: int | None = Field(default=None, ge=0)
+    max_bookings_per_day: int | None = Field(default=None, gt=0)
+    preferences_json: dict[str, str] | None = None
+    place_name: str | None = None
+    place_address: str | None = None
+    place_reference_points: str | None = None
+    accepts_displacement: bool | None = None
+    displacement_fee_cents: int | None = Field(default=None, ge=0)
 
 
 class EscortServiceInput(BaseModel):
@@ -104,25 +112,6 @@ class EscortServiceInput(BaseModel):
     price_cents: int = Field(ge=0)
     restrictions: str | None = None
     sort_order: int = 0
-
-
-class EscortLocationInput(BaseModel):
-    city: str = Field(min_length=1)
-    neighborhood: str | None = None
-    accepts_displacement: bool = False
-    displacement_fee_cents: int | None = Field(default=None, ge=0)
-    sort_order: int = 0
-
-
-class EscortPreferenceInput(BaseModel):
-    key: str = Field(min_length=1)
-    value: str = Field(min_length=1)
-
-
-class EscortAvailabilityInput(BaseModel):
-    min_duration_minutes: int | None = Field(default=None, gt=0)
-    advance_booking_minutes: int | None = Field(default=None, ge=0)
-    max_bookings_per_day: int | None = Field(default=None, gt=0)
 
 
 def require_operator_api_key(
@@ -157,7 +146,10 @@ CONVERSATION_QUEUE_KEYS = {
 }
 ESCORT_SELECT_COLUMNS = """
     id, display_name, is_active, languages, calendar_external_id,
-    photo_main_path, created_at, updated_at
+    photo_main_path, min_duration_minutes, advance_booking_minutes,
+    max_bookings_per_day, preferences_json, place_name, place_address,
+    place_reference_points, accepts_displacement, displacement_fee_cents,
+    created_at, updated_at
 """
 
 
@@ -242,10 +234,6 @@ def create_escort(
             """,
             params,
         ).fetchone()
-        conn.execute(
-            "INSERT INTO app.escort_availability (escort_id) VALUES (%(id)s)",
-            {"id": row["id"]},
-        )
     return row
 
 
@@ -287,46 +275,9 @@ def get_escort_detail(
         {"id": escort_id},
     ).fetchall()
 
-    locations = conn.execute(
-        """
-        SELECT id, city, neighborhood, accepts_displacement,
-               displacement_fee_cents, sort_order
-        FROM app.escort_locations
-        WHERE escort_id = %(id)s
-        ORDER BY sort_order, city
-        """,
-        {"id": escort_id},
-    ).fetchall()
-
-    preferences = conn.execute(
-        """
-        SELECT key, value
-        FROM app.escort_preferences
-        WHERE escort_id = %(id)s
-        ORDER BY key
-        """,
-        {"id": escort_id},
-    ).fetchall()
-
-    availability = conn.execute(
-        """
-        SELECT min_duration_minutes, advance_booking_minutes, max_bookings_per_day
-        FROM app.escort_availability
-        WHERE escort_id = %(id)s
-        """,
-        {"id": escort_id},
-    ).fetchone() or {
-        "min_duration_minutes": None,
-        "advance_booking_minutes": None,
-        "max_bookings_per_day": None,
-    }
-
     return {
         "escort": escort,
         "services": services,
-        "locations": locations,
-        "preferences": preferences,
-        "availability": availability,
     }
 
 
@@ -348,6 +299,18 @@ def patch_escort(
         updates["calendar_external_id"] = _clean_calendar_external_id(updates["calendar_external_id"])
     if "photo_main_path" in updates:
         updates["photo_main_path"] = _clean_optional_text(updates["photo_main_path"])
+    if "preferences_json" in updates:
+        updates["preferences_json"] = Jsonb(updates["preferences_json"] or {})
+    if "place_name" in updates:
+        updates["place_name"] = _clean_optional_text(updates["place_name"])
+    if "place_address" in updates:
+        updates["place_address"] = _clean_optional_text(updates["place_address"])
+    if "place_reference_points" in updates:
+        updates["place_reference_points"] = _clean_optional_text(updates["place_reference_points"])
+    # Espelha o CHECK escorts_displacement_fee_requires_displacement: se a
+    # escort nao aceita deslocamento, a taxa nao faz sentido.
+    if updates.get("accepts_displacement") is False:
+        updates["displacement_fee_cents"] = None
 
     sets = [f"{field} = %({field})s" for field in updates]
     params: dict[str, Any] = {"id": escort_id, **updates}
@@ -426,131 +389,6 @@ def replace_escort_services(
             {"id": escort_id},
         ).fetchall()
     return rows
-
-
-@api.put("/escorts/{escort_id}/locations", response_model=list[dict])
-def replace_escort_locations(
-    escort_id: uuid.UUID,
-    body: list[EscortLocationInput],
-    conn: Connection[dict[str, Any]] = Depends(get_conn),
-) -> list[dict[str, Any]]:
-    with conn.transaction():
-        _ensure_escort_exists(conn, escort_id)
-        conn.execute(
-            "DELETE FROM app.escort_locations WHERE escort_id = %(id)s",
-            {"id": escort_id},
-        )
-        for index, item in enumerate(body):
-            conn.execute(
-                """
-                INSERT INTO app.escort_locations (
-                    escort_id, city, neighborhood, accepts_displacement,
-                    displacement_fee_cents, sort_order
-                ) VALUES (
-                    %(escort_id)s, %(city)s, %(neighborhood)s, %(accepts_displacement)s,
-                    %(displacement_fee_cents)s, %(sort_order)s
-                )
-                """,
-                {
-                    "escort_id": escort_id,
-                    "city": item.city.strip(),
-                    "neighborhood": _clean_optional_text(item.neighborhood),
-                    "accepts_displacement": item.accepts_displacement,
-                    "displacement_fee_cents": item.displacement_fee_cents,
-                    "sort_order": item.sort_order or index,
-                },
-            )
-        rows = conn.execute(
-            """
-            SELECT id, city, neighborhood, accepts_displacement,
-                   displacement_fee_cents, sort_order
-            FROM app.escort_locations
-            WHERE escort_id = %(id)s
-            ORDER BY sort_order, city
-            """,
-            {"id": escort_id},
-        ).fetchall()
-    return rows
-
-
-@api.put("/escorts/{escort_id}/preferences", response_model=list[dict])
-def replace_escort_preferences(
-    escort_id: uuid.UUID,
-    body: list[EscortPreferenceInput],
-    conn: Connection[dict[str, Any]] = Depends(get_conn),
-) -> list[dict[str, Any]]:
-    with conn.transaction():
-        _ensure_escort_exists(conn, escort_id)
-        conn.execute(
-            "DELETE FROM app.escort_preferences WHERE escort_id = %(id)s",
-            {"id": escort_id},
-        )
-        seen: set[str] = set()
-        for item in body:
-            key = item.key.strip()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            conn.execute(
-                """
-                INSERT INTO app.escort_preferences (escort_id, key, value)
-                VALUES (%(escort_id)s, %(key)s, %(value)s)
-                """,
-                {
-                    "escort_id": escort_id,
-                    "key": key,
-                    "value": item.value.strip(),
-                },
-            )
-        rows = conn.execute(
-            """
-            SELECT key, value
-            FROM app.escort_preferences
-            WHERE escort_id = %(id)s
-            ORDER BY key
-            """,
-            {"id": escort_id},
-        ).fetchall()
-    return rows
-
-
-@api.put("/escorts/{escort_id}/availability", response_model=EscortAvailabilityRead)
-def update_escort_availability(
-    escort_id: uuid.UUID,
-    body: EscortAvailabilityInput,
-    conn: Connection[dict[str, Any]] = Depends(get_conn),
-) -> dict[str, Any]:
-    with conn.transaction():
-        _ensure_escort_exists(conn, escort_id)
-        conn.execute(
-            """
-            INSERT INTO app.escort_availability (
-                escort_id, min_duration_minutes, advance_booking_minutes, max_bookings_per_day
-            ) VALUES (
-                %(escort_id)s, %(min_duration_minutes)s, %(advance_booking_minutes)s, %(max_bookings_per_day)s
-            )
-            ON CONFLICT (escort_id) DO UPDATE SET
-                min_duration_minutes = EXCLUDED.min_duration_minutes,
-                advance_booking_minutes = EXCLUDED.advance_booking_minutes,
-                max_bookings_per_day = EXCLUDED.max_bookings_per_day,
-                updated_at = now()
-            """,
-            {
-                "escort_id": escort_id,
-                "min_duration_minutes": body.min_duration_minutes,
-                "advance_booking_minutes": body.advance_booking_minutes,
-                "max_bookings_per_day": body.max_bookings_per_day,
-            },
-        )
-        row = conn.execute(
-            """
-            SELECT min_duration_minutes, advance_booking_minutes, max_bookings_per_day
-            FROM app.escort_availability
-            WHERE escort_id = %(id)s
-            """,
-            {"id": escort_id},
-        ).fetchone()
-    return row
 
 
 def _ensure_escort_exists(conn: Connection[dict[str, Any]], escort_id: uuid.UUID) -> None:
@@ -1881,10 +1719,7 @@ def get_conversation(
         """
         SELECT ma.id, ma.model_id, ma.media_type, ma.is_active,
                ma.metadata_json, ma.created_at, ma.updated_at,
-               COALESCE(
-                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
-                 ARRAY[]::text[]
-               ) AS tags
+               ma.tags
         FROM app.media_assets ma
         WHERE ma.model_id = %(model_id)s
         ORDER BY ma.created_at DESC
@@ -2186,16 +2021,11 @@ def request_schedule_sync() -> dict[str, Any]:
 
 
 @api.get("/media/tags", response_model=list[MediaTagRead])
-def list_media_tags(
-    conn: Connection[dict[str, Any]] = Depends(get_conn),
-) -> list[dict[str, Any]]:
-    return conn.execute(
-        """
-        SELECT tag, display_label, sort_order
-        FROM app.media_tag_vocabulary
-        ORDER BY sort_order, tag
-        """
-    ).fetchall()
+def list_media_tags() -> list[dict[str, Any]]:
+    return [
+        {"tag": tag, "display_label": label, "sort_order": sort_order}
+        for tag, label, sort_order in MEDIA_TAGS
+    ]
 
 
 @api.get("/media", response_model=PaginatedEnvelope[MediaRead])
@@ -2222,9 +2052,7 @@ def list_media(
         conditions.append("ma.is_active = %(is_active)s")
         params["is_active"] = is_active
     if tag:
-        conditions.append(
-            "EXISTS (SELECT 1 FROM app.media_tags t WHERE t.media_id = ma.id AND t.tag = %(tag)s)"
-        )
+        conditions.append("%(tag)s = ANY(ma.tags)")
         params["tag"] = tag
     if q:
         conditions.append("ma.metadata_json->>'original_filename' ILIKE %(q)s")
@@ -2241,10 +2069,7 @@ def list_media(
         f"""
         SELECT ma.id, ma.model_id, ma.media_type, ma.is_active, ma.deactivated_at,
                ma.metadata_json, ma.created_at, ma.updated_at,
-               COALESCE(
-                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
-                 ARRAY[]::text[]
-               ) AS tags
+               ma.tags
         FROM app.media_assets ma
         {where}
         ORDER BY ma.created_at DESC, ma.id DESC
@@ -2310,10 +2135,7 @@ def get_media_usage_summary(
           ma.media_type,
           ma.is_active,
           count(m.id) AS count,
-          COALESCE(
-            (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
-            ARRAY[]::text[]
-          ) AS tags
+          ma.tags
         FROM app.messages m
         JOIN app.media_assets ma ON ma.id = m.media_id
         WHERE m.media_id IS NOT NULL
@@ -2346,10 +2168,7 @@ def get_media_usage_summary(
           ma.media_type,
           ma.is_active,
           count(m.id) AS count,
-          COALESCE(
-            (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
-            ARRAY[]::text[]
-          ) AS tags
+          ma.tags
         FROM app.messages m
         JOIN app.media_assets ma ON ma.id = m.media_id
         WHERE m.media_id IS NOT NULL
@@ -2419,7 +2238,7 @@ async def upload_media(
     if selected_model_id is None:
         raise HTTPException(status_code=409, detail="no active model")
 
-    normalized_tags = _validate_media_tags(conn, tags)
+    normalized_tags = _validate_media_tags(tags)
 
     media_id = uuid.uuid4()
     extension = MIME_EXTENSIONS[detected_mime]
@@ -2433,9 +2252,9 @@ async def upload_media(
         conn.execute(
             """
             INSERT INTO app.media_assets (
-              id, model_id, media_type, storage_path, metadata_json
+              id, model_id, media_type, storage_path, metadata_json, tags
             ) VALUES (
-              %(id)s, %(model_id)s, %(media_type)s, %(storage_path)s, %(metadata_json)s
+              %(id)s, %(model_id)s, %(media_type)s, %(storage_path)s, %(metadata_json)s, %(tags)s
             )
             """,
             {
@@ -2450,13 +2269,9 @@ async def upload_media(
                         "size_bytes": len(data),
                     }
                 ),
+                "tags": normalized_tags,
             },
         )
-        for tag in normalized_tags:
-            conn.execute(
-                "INSERT INTO app.media_tags (media_id, tag) VALUES (%(id)s, %(tag)s)",
-                {"id": media_id, "tag": tag},
-            )
     except ForeignKeyViolation as exc:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=404, detail="model not found") from exc
@@ -2489,6 +2304,9 @@ def patch_media(
     if "metadata_json" in updates:
         sets.append("metadata_json = %(metadata_json)s")
         params["metadata_json"] = Jsonb(updates["metadata_json"])
+    if "tags" in updates:
+        sets.append("tags = %(tags)s")
+        params["tags"] = _validate_media_tags(updates["tags"] or [])
 
     if sets:
         conn.execute(
@@ -2498,21 +2316,6 @@ def patch_media(
             WHERE id = %(id)s
             """,
             params,
-        )
-
-    if "tags" in updates:
-        normalized_tags = _validate_media_tags(conn, updates["tags"] or [])
-        conn.execute(
-            "DELETE FROM app.media_tags WHERE media_id = %(id)s", {"id": media_id}
-        )
-        for tag in normalized_tags:
-            conn.execute(
-                "INSERT INTO app.media_tags (media_id, tag) VALUES (%(id)s, %(tag)s)",
-                {"id": media_id, "tag": tag},
-            )
-        conn.execute(
-            "UPDATE app.media_assets SET updated_at = now() WHERE id = %(id)s",
-            {"id": media_id},
         )
 
     return _select_media(conn, media_id)
@@ -3329,12 +3132,10 @@ def _count_escort_pendencies(
     )
     if services == 0:
         pending += 1
-    locations = _count(
-        conn,
-        "SELECT count(*) FROM app.escort_locations WHERE escort_id = %(id)s",
-        {"id": escort["id"]},
-    )
-    if locations == 0:
+    place_address = escort.get("place_address")
+    has_place = bool(place_address and str(place_address).strip())
+    accepts_displacement = bool(escort.get("accepts_displacement"))
+    if not has_place and not accepts_displacement:
         pending += 1
     return pending
 
@@ -3754,18 +3555,11 @@ def _insert_handoff_event(
     )
 
 
-def _validate_media_tags(
-    conn: Connection[dict[str, Any]], tags: list[str]
-) -> list[str]:
+def _validate_media_tags(tags: list[str]) -> list[str]:
     normalized = sorted({t.strip() for t in tags if t and t.strip()})
     if not normalized:
         return []
-    rows = conn.execute(
-        "SELECT tag FROM app.media_tag_vocabulary WHERE tag = ANY(%(tags)s)",
-        {"tags": normalized},
-    ).fetchall()
-    known = {row["tag"] for row in rows}
-    unknown = [t for t in normalized if t not in known]
+    unknown = [t for t in normalized if t not in MEDIA_TAG_VALUES]
     if unknown:
         raise HTTPException(
             status_code=422,
@@ -3781,10 +3575,7 @@ def _select_media(
         """
         SELECT ma.id, ma.model_id, ma.media_type, ma.is_active, ma.deactivated_at,
                ma.metadata_json, ma.created_at, ma.updated_at,
-               COALESCE(
-                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
-                 ARRAY[]::text[]
-               ) AS tags
+               ma.tags
         FROM app.media_assets ma
         WHERE ma.id = %(id)s
         """,

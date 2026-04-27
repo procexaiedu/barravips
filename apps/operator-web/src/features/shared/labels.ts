@@ -124,6 +124,8 @@ export function escortPendencyKindLabel(kind: string): string {
       return "Idiomas";
     case "MISSING_CALENDAR_ID":
       return "Agenda";
+    case "MISSING_PLACE_OR_DISPLACEMENT":
+      return "Local";
     default:
       return kind;
   }

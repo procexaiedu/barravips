@@ -15,7 +15,7 @@ export default async function AcompanhanteConfiguracaoPage({
     <section className="page-stack">
       <PageHeader
         title={creating ? "Nova acompanhante" : "Editar acompanhante"}
-        description="Cadastre identidade, oferta, mídias, locais e preferências. Comportamento e regras do agente são definidos pela engenharia."
+        description="Cadastre identidade, oferta, mídias e local. Comportamento e regras do agente são definidos pela engenharia."
         eyebrow="Catálogo · Acompanhantes"
         secondaryAction={{ label: "Lista de acompanhantes", href: "/acompanhantes" }}
       />

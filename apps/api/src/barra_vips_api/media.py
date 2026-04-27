@@ -20,6 +20,20 @@ MEDIA_TYPES = {
 }
 
 
+MEDIA_TAGS: tuple[tuple[str, str, int], ...] = (
+    ("rosto",         "Rosto",           10),
+    ("corpo",         "Corpo",           20),
+    ("casual",        "Casual",          30),
+    ("sensual",       "Sensual",         40),
+    ("elegante",      "Elegante",        50),
+    ("lingerie",      "Lingerie",        60),
+    ("praia-piscina", "Praia / piscina", 70),
+    ("ambiente",      "Ambiente",        80),
+)
+
+MEDIA_TAG_VALUES: frozenset[str] = frozenset(tag for tag, _, _ in MEDIA_TAGS)
+
+
 def detect_mime(data: bytes) -> str | None:
     head = data[:32]
     if head.startswith(b"\xff\xd8\xff"):

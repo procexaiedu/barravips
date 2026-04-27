@@ -10,10 +10,6 @@ INSERT INTO app.escorts (
   ARRAY[]::text[]
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO app.escort_availability (escort_id)
-VALUES ('10000000-0000-0000-0000-000000000001')
-ON CONFLICT (escort_id) DO NOTHING;
-
 INSERT INTO app.clients (
   id,
   whatsapp_jid,

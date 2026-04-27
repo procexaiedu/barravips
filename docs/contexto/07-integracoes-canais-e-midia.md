@@ -202,7 +202,7 @@ Cada midia tem:
 - tipo de arquivo (image, audio, video, document);
 - caminho interno de armazenamento;
 - estado `is_active` (default true; quando false grava tambem `deactivated_at`);
-- conjunto de tags (multi-valorada, vocabulario controlado em `app.media_tag_vocabulary`);
+- conjunto de tags (`app.media_assets.tags` text[], vocabulario controlado por CHECK constraint e pela constante `MEDIA_TAGS` em `apps/api/src/barra_vips_api/media.py`);
 - `metadata_json` com MIME real, tamanho e nome original do arquivo;
 - timestamps de criacao e atualizacao.
 
@@ -229,12 +229,12 @@ Regras:
 Ordem de selecao:
 
 1. Filtrar por modelo, tipo solicitado e `is_active = true`.
-2. Se houver contexto util, filtrar tambem por tag (`app.media_tags`).
+2. Se houver contexto util, filtrar tambem por tag (`%(tag)s = ANY(app.media_assets.tags)`).
 3. Excluir midias ja enviadas para aquele cliente (via `app.messages.media_id`).
 4. Entre elegiveis, priorizar a menos usada globalmente.
 5. Se todas ja foram enviadas, repetir a mais antiga.
 
-Vocabulario inicial de tags (consolidado pela migration 004 sobre o seed da 003): `rosto`, `corpo`, `casual`, `sensual`, `elegante`, `lingerie`, `praia-piscina`, `ambiente`. Refletem styling, foco da imagem e cenario, que sao as dimensoes que o agente cruza com o pedido do cliente. Para acrescentar tags: INSERT direto em `app.media_tag_vocabulary` (UI de gestao de vocabulario fora do escopo do MVP).
+Vocabulario de tags (definido na migration 004 e inlinado em `app.media_assets.tags` na 008): `rosto`, `corpo`, `casual`, `sensual`, `elegante`, `lingerie`, `praia-piscina`, `ambiente`. Refletem styling, foco da imagem e cenario, que sao as dimensoes que o agente cruza com o pedido do cliente. Para acrescentar tags: nova migration alterando o CHECK `media_assets_tags_known` em sincronia com a constante `MEDIA_TAGS` em `apps/api/src/barra_vips_api/media.py` (UI de gestao de vocabulario fora do escopo do MVP).
 
 ## Publicacao de midia
 

@@ -139,6 +139,15 @@ export type EscortRead = {
   languages: string[];
   calendar_external_id: string | null;
   photo_main_path: string | null;
+  min_duration_minutes: number | null;
+  advance_booking_minutes: number | null;
+  max_bookings_per_day: number | null;
+  preferences_json: Record<string, string>;
+  place_name: string | null;
+  place_address: string | null;
+  place_reference_points: string | null;
+  accepts_displacement: boolean;
+  displacement_fee_cents: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -153,32 +162,9 @@ export type EscortServiceRead = {
   sort_order: number;
 };
 
-export type EscortLocationRead = {
-  id: string;
-  city: string;
-  neighborhood: string | null;
-  accepts_displacement: boolean;
-  displacement_fee_cents: number | null;
-  sort_order: number;
-};
-
-export type EscortPreferenceRead = {
-  key: string;
-  value: string;
-};
-
-export type EscortAvailabilityRead = {
-  min_duration_minutes: number | null;
-  advance_booking_minutes: number | null;
-  max_bookings_per_day: number | null;
-};
-
 export type EscortDetailRead = {
   escort: EscortRead;
   services: EscortServiceRead[];
-  locations: EscortLocationRead[];
-  preferences: EscortPreferenceRead[];
-  availability: EscortAvailabilityRead;
 };
 
 export type EscortCreateInput = {
@@ -189,7 +175,19 @@ export type EscortCreateInput = {
   photo_main_path: string | null;
 };
 
-export type EscortPatchInput = Partial<EscortCreateInput>;
+export type EscortPatchInput = Partial<
+  EscortCreateInput & {
+    min_duration_minutes: number | null;
+    advance_booking_minutes: number | null;
+    max_bookings_per_day: number | null;
+    preferences_json: Record<string, string>;
+    place_name: string | null;
+    place_address: string | null;
+    place_reference_points: string | null;
+    accepts_displacement: boolean;
+    displacement_fee_cents: number | null;
+  }
+>;
 
 export type EscortServiceInput = {
   name: string;
@@ -198,25 +196,6 @@ export type EscortServiceInput = {
   price_cents: number;
   restrictions: string | null;
   sort_order: number;
-};
-
-export type EscortLocationInput = {
-  city: string;
-  neighborhood: string | null;
-  accepts_displacement: boolean;
-  displacement_fee_cents: number | null;
-  sort_order: number;
-};
-
-export type EscortPreferenceInput = {
-  key: string;
-  value: string;
-};
-
-export type EscortAvailabilityInput = {
-  min_duration_minutes: number | null;
-  advance_booking_minutes: number | null;
-  max_bookings_per_day: number | null;
 };
 
 export type LastMessageRead = {

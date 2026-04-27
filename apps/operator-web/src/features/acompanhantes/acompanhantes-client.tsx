@@ -5,10 +5,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
-  EscortAvailabilityRead,
   EscortDetailRead,
-  EscortLocationRead,
-  EscortPreferenceRead,
+  EscortPatchInput,
   EscortRead,
   EscortServiceRead,
   PaginatedEnvelope,
@@ -20,17 +18,16 @@ import { detectEscortPendencies } from "@/features/shared/pending";
 
 const POLL_INTERVAL_MS = 30_000;
 
-type Tab = "resumo" | "oferta" | "midias" | "disponibilidade" | "preferencias";
+type Tab = "resumo" | "oferta" | "midias" | "local";
 
 const TAB_LABELS: Record<Tab, string> = {
   resumo: "Resumo",
   oferta: "Oferta",
   midias: "Mídias",
-  disponibilidade: "Disponibilidade",
-  preferencias: "Preferências",
+  local: "Local",
 };
 
-const TAB_ORDER: Tab[] = ["resumo", "oferta", "midias", "disponibilidade", "preferencias"];
+const TAB_ORDER: Tab[] = ["resumo", "oferta", "midias", "local"];
 
 type Notice = { tone: "ok" | "error"; message: string };
 
@@ -200,7 +197,6 @@ type EscortDraft = {
   is_active: boolean;
   languages_text: string;
   calendar_external_id: string;
-  photo_main_path: string;
 };
 
 type ServiceDraft = {
@@ -212,21 +208,11 @@ type ServiceDraft = {
 };
 
 type LocationDraft = {
-  city: string;
-  neighborhood: string;
+  place_name: string;
+  place_address: string;
+  place_reference_points: string;
   accepts_displacement: boolean;
   displacement_fee_brl: string;
-};
-
-type PreferenceDraft = {
-  key: string;
-  value: string;
-};
-
-type AvailabilityDraft = {
-  min_duration_minutes: string;
-  advance_booking_minutes: string;
-  max_bookings_per_day: string;
 };
 
 const EMPTY_ESCORT: EscortDraft = {
@@ -234,13 +220,14 @@ const EMPTY_ESCORT: EscortDraft = {
   is_active: false,
   languages_text: "pt-BR",
   calendar_external_id: "",
-  photo_main_path: "",
 };
 
-const EMPTY_AVAILABILITY: AvailabilityDraft = {
-  min_duration_minutes: "",
-  advance_booking_minutes: "",
-  max_bookings_per_day: "",
+const EMPTY_LOCATION: LocationDraft = {
+  place_name: "",
+  place_address: "",
+  place_reference_points: "",
+  accepts_displacement: false,
+  displacement_fee_brl: "",
 };
 
 export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string }) {
@@ -249,9 +236,7 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
   const [tab, setTab] = useState<Tab>("resumo");
   const [escort, setEscort] = useState<EscortDraft>(EMPTY_ESCORT);
   const [services, setServices] = useState<ServiceDraft[]>([]);
-  const [locations, setLocations] = useState<LocationDraft[]>([]);
-  const [preferences, setPreferences] = useState<PreferenceDraft[]>([]);
-  const [availability, setAvailability] = useState<AvailabilityDraft>(EMPTY_AVAILABILITY);
+  const [location, setLocation] = useState<LocationDraft>(EMPTY_LOCATION);
   const [loading, setLoading] = useState(!creating);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -274,15 +259,15 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
     setLoadedEscort(detail.escort);
     setEscort(escortToDraft(detail.escort));
     setServices(detail.services.map(serviceToDraft));
-    setLocations(detail.locations.map(locationToDraft));
-    setPreferences(detail.preferences.map(preferenceToDraft));
-    setAvailability(availabilityToDraft(detail.availability));
+    setLocation(locationFromEscort(detail.escort));
     setLoading(false);
   }, [creating, escortId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const calendarMissing = !escort.calendar_external_id.trim();
 
   const livePendencies = useMemo(
     () =>
@@ -291,8 +276,10 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
         display_name: escort.display_name,
         languages: parseLanguages(escort.languages_text),
         calendar_external_id: escort.calendar_external_id.trim() || null,
+        place_address: location.place_address.trim() || null,
+        accepts_displacement: location.accepts_displacement,
       }),
-    [escort],
+    [escort, location],
   );
 
   const onSubmitMain = useCallback(
@@ -305,20 +292,34 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
         return;
       }
       setSaving(true);
-      const payload = {
+      if (creating) {
+        // Criação enxuta: só nome. Idiomas, calendar (time tecnico), local e
+        // oferta entram nas abas seguintes apos o cadastro existir.
+        const result = await bffSend<EscortRead>("/api/operator/escorts", {
+          display_name: displayName,
+        });
+        setSaving(false);
+        if (result.error || !result.data) {
+          setNotice({
+            tone: "error",
+            message: result.error?.message ?? "Não consegui criar a acompanhante.",
+          });
+          return;
+        }
+        router.replace(`/acompanhantes/${result.data.id}/configuracao`);
+        return;
+      }
+      const payload: EscortPatchInput = {
         display_name: displayName,
         is_active: escort.is_active,
         languages: parseLanguages(escort.languages_text),
         calendar_external_id: escort.calendar_external_id.trim() || null,
-        photo_main_path: escort.photo_main_path.trim() || null,
       };
-      const result = creating
-        ? await bffSend<EscortRead>("/api/operator/escorts", payload)
-        : await bffSend<EscortRead>(
-            `/api/operator/escorts/${encodeURIComponent(escortId)}`,
-            payload,
-            "PATCH",
-          );
+      const result = await bffSend<EscortRead>(
+        `/api/operator/escorts/${encodeURIComponent(escortId)}`,
+        payload,
+        "PATCH",
+      );
       setSaving(false);
       if (result.error || !result.data) {
         setNotice({
@@ -328,13 +329,7 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
         return;
       }
       setLoadedEscort(result.data);
-      setNotice({
-        tone: "ok",
-        message: creating ? "Acompanhante criada." : "Cadastro atualizado.",
-      });
-      if (creating) {
-        router.replace(`/acompanhantes/${result.data.id}/configuracao`);
-      }
+      setNotice({ tone: "ok", message: "Cadastro atualizado." });
     },
     [creating, escort, escortId, router],
   );
@@ -367,85 +362,35 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
       .finally(() => setSaving(false));
   }, [creating, loadedEscort, services]);
 
-  const onSaveLocations = useCallback(async () => {
+  const onSaveLocation = useCallback(async () => {
     if (creating || !loadedEscort) {
-      setNotice({ tone: "error", message: "Salve a acompanhante antes de cadastrar locais." });
+      setNotice({ tone: "error", message: "Salve a acompanhante antes de cadastrar o local." });
       return;
     }
-    setSaving(true);
-    const payload = locations.map((location, index) => ({
-      city: location.city.trim(),
-      neighborhood: location.neighborhood.trim() || null,
+    const fee = location.accepts_displacement
+      ? brlToCents(location.displacement_fee_brl)
+      : 0;
+    const payload: EscortPatchInput = {
+      place_name: location.place_name.trim() || null,
+      place_address: location.place_address.trim() || null,
+      place_reference_points: location.place_reference_points.trim() || null,
       accepts_displacement: location.accepts_displacement,
-      displacement_fee_cents: location.accepts_displacement
-        ? brlToCents(location.displacement_fee_brl)
-        : null,
-      sort_order: index,
-    }));
-    const invalid = payload.find((l) => !l.city);
-    if (invalid) {
-      setSaving(false);
-      setNotice({ tone: "error", message: "Cada local precisa de cidade." });
-      return;
-    }
-    await putJson(
-      `/api/operator/escorts/${encodeURIComponent(loadedEscort.id)}/locations`,
-      payload,
-    )
-      .then(() => setNotice({ tone: "ok", message: "Locais atualizados." }))
-      .catch(() =>
-        setNotice({ tone: "error", message: "Não consegui salvar os locais." }),
-      )
-      .finally(() => setSaving(false));
-  }, [creating, loadedEscort, locations]);
-
-  const onSavePreferences = useCallback(async () => {
-    if (creating || !loadedEscort) {
-      setNotice({ tone: "error", message: "Salve a acompanhante antes de cadastrar preferências." });
-      return;
-    }
-    setSaving(true);
-    const payload = preferences
-      .map((preference) => ({
-        key: preference.key.trim(),
-        value: preference.value.trim(),
-      }))
-      .filter((p) => p.key && p.value);
-    await putJson(
-      `/api/operator/escorts/${encodeURIComponent(loadedEscort.id)}/preferences`,
-      payload,
-    )
-      .then(() => setNotice({ tone: "ok", message: "Preferências atualizadas." }))
-      .catch(() =>
-        setNotice({ tone: "error", message: "Não consegui salvar as preferências." }),
-      )
-      .finally(() => setSaving(false));
-  }, [creating, loadedEscort, preferences]);
-
-  const onSaveAvailability = useCallback(async () => {
-    if (creating || !loadedEscort) {
-      setNotice({
-        tone: "error",
-        message: "Salve a acompanhante antes de configurar disponibilidade.",
-      });
-      return;
-    }
-    setSaving(true);
-    const payload = {
-      min_duration_minutes: parseIntOrNull(availability.min_duration_minutes),
-      advance_booking_minutes: parseIntOrNull(availability.advance_booking_minutes),
-      max_bookings_per_day: parseIntOrNull(availability.max_bookings_per_day),
+      displacement_fee_cents: location.accepts_displacement && fee > 0 ? fee : null,
     };
-    await putJson(
-      `/api/operator/escorts/${encodeURIComponent(loadedEscort.id)}/availability`,
+    setSaving(true);
+    const result = await bffSend<EscortRead>(
+      `/api/operator/escorts/${encodeURIComponent(loadedEscort.id)}`,
       payload,
-    )
-      .then(() => setNotice({ tone: "ok", message: "Disponibilidade atualizada." }))
-      .catch(() =>
-        setNotice({ tone: "error", message: "Não consegui salvar a disponibilidade." }),
-      )
-      .finally(() => setSaving(false));
-  }, [availability, creating, loadedEscort]);
+      "PATCH",
+    );
+    setSaving(false);
+    if (result.error || !result.data) {
+      setNotice({ tone: "error", message: "Não consegui salvar o local." });
+      return;
+    }
+    setLoadedEscort(result.data);
+    setNotice({ tone: "ok", message: "Local atualizado." });
+  }, [creating, loadedEscort, location]);
 
   if (loading) {
     return (
@@ -491,6 +436,12 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
               <span className="badge ok">Pronto</span>
             )}
           </div>
+          {creating ? (
+            <p className="empty-state" style={{ textAlign: "left" }}>
+              Cadastre o nome para criar. Idiomas, calendar (configurado pelo time
+              técnico), local e oferta entram nas próximas abas depois que ela existir.
+            </p>
+          ) : null}
           <form className="form-grid" onSubmit={onSubmitMain} aria-label="Resumo da acompanhante">
             <label className="form-field">
               <span>Nome de exibição</span>
@@ -502,49 +453,50 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
                 required
               />
             </label>
-            <label className="form-field">
-              <span>Idiomas (separe por vírgula)</span>
-              <input
-                type="text"
-                value={escort.languages_text}
-                onChange={(event) => setEscort({ ...escort, languages_text: event.target.value })}
-                placeholder="pt-BR, en"
-              />
-            </label>
-            <label className="form-field">
-              <span>Google Calendar ID</span>
-              <input
-                type="text"
-                value={escort.calendar_external_id}
-                onChange={(event) =>
-                  setEscort({ ...escort, calendar_external_id: event.target.value })
-                }
-                placeholder="agenda@..."
-              />
-            </label>
-            <label className="form-field">
-              <span>Foto principal (caminho/URL)</span>
-              <input
-                type="text"
-                value={escort.photo_main_path}
-                onChange={(event) =>
-                  setEscort({ ...escort, photo_main_path: event.target.value })
-                }
-                placeholder="Opcional"
-              />
-            </label>
-            <label className="form-field">
-              <span>Status operacional</span>
-              <select
-                value={escort.is_active ? "active" : "inactive"}
-                onChange={(event) =>
-                  setEscort({ ...escort, is_active: event.target.value === "active" })
-                }
-              >
-                <option value="active">Ativa (atende)</option>
-                <option value="inactive">Inativa</option>
-              </select>
-            </label>
+            {!creating ? (
+              <>
+                <label className="form-field">
+                  <span>Idiomas (separe por vírgula)</span>
+                  <input
+                    type="text"
+                    value={escort.languages_text}
+                    onChange={(event) =>
+                      setEscort({ ...escort, languages_text: event.target.value })
+                    }
+                    placeholder="pt-BR, en"
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Google Calendar (configurado pelo time técnico)</span>
+                  <input
+                    type="text"
+                    value={escort.calendar_external_id}
+                    onChange={(event) =>
+                      setEscort({ ...escort, calendar_external_id: event.target.value })
+                    }
+                    placeholder="agenda@..."
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Status operacional</span>
+                  <select
+                    value={escort.is_active ? "active" : "inactive"}
+                    onChange={(event) =>
+                      setEscort({ ...escort, is_active: event.target.value === "active" })
+                    }
+                    disabled={calendarMissing}
+                    title={
+                      calendarMissing
+                        ? "Aguardando configuração do calendar pelo time técnico"
+                        : undefined
+                    }
+                  >
+                    <option value="active">Ativa (atende)</option>
+                    <option value="inactive">Inativa</option>
+                  </select>
+                </label>
+              </>
+            ) : null}
             <div className="button-row" style={{ gridColumn: "1 / -1" }}>
               <button className="button" type="submit" disabled={saving}>
                 {saving ? "Salvando..." : creating ? "Criar acompanhante" : "Salvar"}
@@ -591,23 +543,11 @@ export function AcompanhanteConfiguracaoClient({ escortId }: { escortId: string 
         </section>
       ) : null}
 
-      {tab === "disponibilidade" && loadedEscort ? (
-        <DisponibilidadePanel
-          locations={locations}
-          onChangeLocations={setLocations}
-          onSaveLocations={onSaveLocations}
-          availability={availability}
-          onChangeAvailability={setAvailability}
-          onSaveAvailability={onSaveAvailability}
-          saving={saving}
-        />
-      ) : null}
-
-      {tab === "preferencias" && loadedEscort ? (
-        <PreferencesPanel
-          preferences={preferences}
-          onChange={setPreferences}
-          onSave={onSavePreferences}
+      {tab === "local" && loadedEscort ? (
+        <LocalPanel
+          location={location}
+          onChange={setLocation}
+          onSave={onSaveLocation}
           saving={saving}
         />
       ) : null}
@@ -743,268 +683,87 @@ function ServicesPanel({
   );
 }
 
-function DisponibilidadePanel({
-  locations,
-  onChangeLocations,
-  onSaveLocations,
-  availability,
-  onChangeAvailability,
-  onSaveAvailability,
-  saving,
-}: {
-  locations: LocationDraft[];
-  onChangeLocations: (next: LocationDraft[]) => void;
-  onSaveLocations: () => void;
-  availability: AvailabilityDraft;
-  onChangeAvailability: (next: AvailabilityDraft) => void;
-  onSaveAvailability: () => void;
-  saving: boolean;
-}) {
-  return (
-    <div className="section-stack">
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Locais atendidos</h2>
-          <span className="badge muted">{locations.length} local(is)</span>
-        </div>
-        <div className="stack-sm">
-          {locations.map((location, index) => (
-            <fieldset
-              key={index}
-              className="form-grid"
-              style={{ borderTop: "1px solid #2a2a2a", paddingTop: 12 }}
-            >
-              <label className="form-field">
-                <span>Cidade</span>
-                <input
-                  type="text"
-                  value={location.city}
-                  onChange={(event) =>
-                    onChangeLocations(
-                      updateAt(locations, index, { ...location, city: event.target.value }),
-                    )
-                  }
-                  required
-                />
-              </label>
-              <label className="form-field">
-                <span>Bairro</span>
-                <input
-                  type="text"
-                  value={location.neighborhood}
-                  onChange={(event) =>
-                    onChangeLocations(
-                      updateAt(locations, index, {
-                        ...location,
-                        neighborhood: event.target.value,
-                      }),
-                    )
-                  }
-                  placeholder="Opcional"
-                />
-              </label>
-              <label className="form-field">
-                <span>Aceita deslocamento?</span>
-                <select
-                  value={location.accepts_displacement ? "yes" : "no"}
-                  onChange={(event) =>
-                    onChangeLocations(
-                      updateAt(locations, index, {
-                        ...location,
-                        accepts_displacement: event.target.value === "yes",
-                      }),
-                    )
-                  }
-                >
-                  <option value="no">Não</option>
-                  <option value="yes">Sim</option>
-                </select>
-              </label>
-              {location.accepts_displacement ? (
-                <label className="form-field">
-                  <span>Taxa de deslocamento (R$)</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={location.displacement_fee_brl}
-                    onChange={(event) =>
-                      onChangeLocations(
-                        updateAt(locations, index, {
-                          ...location,
-                          displacement_fee_brl: event.target.value,
-                        }),
-                      )
-                    }
-                    placeholder="0,00"
-                  />
-                </label>
-              ) : null}
-              <div className="button-row" style={{ gridColumn: "1 / -1" }}>
-                <button
-                  className="button secondary"
-                  type="button"
-                  onClick={() => onChangeLocations(locations.filter((_, i) => i !== index))}
-                >
-                  Remover local
-                </button>
-              </div>
-            </fieldset>
-          ))}
-        </div>
-        <div className="button-row">
-          <button
-            className="button secondary"
-            type="button"
-            onClick={() =>
-              onChangeLocations([
-                ...locations,
-                {
-                  city: "",
-                  neighborhood: "",
-                  accepts_displacement: false,
-                  displacement_fee_brl: "",
-                },
-              ])
-            }
-          >
-            Adicionar local
-          </button>
-          <button className="button" type="button" onClick={onSaveLocations} disabled={saving}>
-            {saving ? "Salvando..." : "Salvar locais"}
-          </button>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-heading">
-          <h2>Restrições de booking</h2>
-        </div>
-        <div className="form-grid">
-          <label className="form-field">
-            <span>Duração mínima (min)</span>
-            <input
-              type="number"
-              min={1}
-              value={availability.min_duration_minutes}
-              onChange={(event) =>
-                onChangeAvailability({ ...availability, min_duration_minutes: event.target.value })
-              }
-              placeholder="60"
-            />
-          </label>
-          <label className="form-field">
-            <span>Antecedência mínima (min)</span>
-            <input
-              type="number"
-              min={0}
-              value={availability.advance_booking_minutes}
-              onChange={(event) =>
-                onChangeAvailability({
-                  ...availability,
-                  advance_booking_minutes: event.target.value,
-                })
-              }
-              placeholder="120"
-            />
-          </label>
-          <label className="form-field">
-            <span>Máximo por dia</span>
-            <input
-              type="number"
-              min={1}
-              value={availability.max_bookings_per_day}
-              onChange={(event) =>
-                onChangeAvailability({ ...availability, max_bookings_per_day: event.target.value })
-              }
-              placeholder="3"
-            />
-          </label>
-          <div className="button-row" style={{ gridColumn: "1 / -1" }}>
-            <button className="button" type="button" onClick={onSaveAvailability} disabled={saving}>
-              {saving ? "Salvando..." : "Salvar disponibilidade"}
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function PreferencesPanel({
-  preferences,
+function LocalPanel({
+  location,
   onChange,
   onSave,
   saving,
 }: {
-  preferences: PreferenceDraft[];
-  onChange: (next: PreferenceDraft[]) => void;
+  location: LocationDraft;
+  onChange: (next: LocationDraft) => void;
   onSave: () => void;
   saving: boolean;
 }) {
   return (
     <section className="panel">
       <div className="panel-heading">
-        <h2>Preferências</h2>
-        <span className="badge muted">{preferences.length} item(ns)</span>
+        <h2>Local de atendimento</h2>
       </div>
       <p className="empty-state" style={{ textAlign: "left" }}>
-        Restrições e preferências objetivas (ex.: aceita_fumantes = não, idioma_preferido =
-        pt-BR). Use chave/valor curtos.
+        Onde ela atende fixo. Se não tem local fixo (só desloca para o cliente),
+        deixe em branco e marque &quot;aceita deslocamento&quot;.
       </p>
-      <div className="stack-sm">
-        {preferences.map((preference, index) => (
-          <fieldset
-            key={index}
-            className="form-grid"
-            style={{ borderTop: "1px solid #2a2a2a", paddingTop: 12 }}
+      <div className="form-grid">
+        <label className="form-field">
+          <span>Nome do local</span>
+          <input
+            type="text"
+            value={location.place_name}
+            onChange={(event) => onChange({ ...location, place_name: event.target.value })}
+            placeholder="Ex.: Apartamento Barra"
+          />
+        </label>
+        <label className="form-field" style={{ gridColumn: "1 / -1" }}>
+          <span>Endereço (rua, número, apto, complemento)</span>
+          <input
+            type="text"
+            value={location.place_address}
+            onChange={(event) => onChange({ ...location, place_address: event.target.value })}
+            placeholder="Av. das Américas, 100, apto 200"
+          />
+        </label>
+        <label className="form-field" style={{ gridColumn: "1 / -1" }}>
+          <span>Referências (pontos próximos)</span>
+          <textarea
+            rows={2}
+            value={location.place_reference_points}
+            onChange={(event) =>
+              onChange({ ...location, place_reference_points: event.target.value })
+            }
+            placeholder="Próximo ao shopping X, em frente ao metrô Y"
+          />
+        </label>
+        <label className="form-field">
+          <span>Aceita deslocamento?</span>
+          <select
+            value={location.accepts_displacement ? "yes" : "no"}
+            onChange={(event) =>
+              onChange({ ...location, accepts_displacement: event.target.value === "yes" })
+            }
           >
-            <label className="form-field">
-              <span>Chave</span>
-              <input
-                type="text"
-                value={preference.key}
-                onChange={(event) =>
-                  onChange(updateAt(preferences, index, { ...preference, key: event.target.value }))
-                }
-                placeholder="aceita_fumantes"
-              />
-            </label>
-            <label className="form-field">
-              <span>Valor</span>
-              <input
-                type="text"
-                value={preference.value}
-                onChange={(event) =>
-                  onChange(
-                    updateAt(preferences, index, { ...preference, value: event.target.value }),
-                  )
-                }
-                placeholder="nao"
-              />
-            </label>
-            <div className="button-row" style={{ gridColumn: "1 / -1" }}>
-              <button
-                className="button secondary"
-                type="button"
-                onClick={() => onChange(preferences.filter((_, i) => i !== index))}
-              >
-                Remover
-              </button>
-            </div>
-          </fieldset>
-        ))}
-      </div>
-      <div className="button-row">
-        <button
-          className="button secondary"
-          type="button"
-          onClick={() => onChange([...preferences, { key: "", value: "" }])}
-        >
-          Adicionar preferência
-        </button>
-        <button className="button" type="button" onClick={onSave} disabled={saving}>
-          {saving ? "Salvando..." : "Salvar preferências"}
-        </button>
+            <option value="no">Não</option>
+            <option value="yes">Sim</option>
+          </select>
+        </label>
+        {location.accepts_displacement ? (
+          <label className="form-field">
+            <span>Taxa de deslocamento (R$)</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={location.displacement_fee_brl}
+              onChange={(event) =>
+                onChange({ ...location, displacement_fee_brl: event.target.value })
+              }
+              placeholder="0,00 (deixe em branco se a taxa varia)"
+            />
+          </label>
+        ) : null}
+        <div className="button-row" style={{ gridColumn: "1 / -1" }}>
+          <button className="button" type="button" onClick={onSave} disabled={saving}>
+            {saving ? "Salvando..." : "Salvar local"}
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -1017,6 +776,15 @@ const EMPTY_ESCORT_READ: EscortRead = {
   languages: [],
   calendar_external_id: null,
   photo_main_path: null,
+  min_duration_minutes: null,
+  advance_booking_minutes: null,
+  max_bookings_per_day: null,
+  preferences_json: {},
+  place_name: null,
+  place_address: null,
+  place_reference_points: null,
+  accepts_displacement: false,
+  displacement_fee_cents: null,
   created_at: "",
   updated_at: "",
 };
@@ -1027,7 +795,6 @@ function escortToDraft(escort: EscortRead): EscortDraft {
     is_active: escort.is_active,
     languages_text: escort.languages.join(", "),
     calendar_external_id: escort.calendar_external_id ?? "",
-    photo_main_path: escort.photo_main_path ?? "",
   };
 }
 
@@ -1041,30 +808,16 @@ function serviceToDraft(service: EscortServiceRead): ServiceDraft {
   };
 }
 
-function locationToDraft(location: EscortLocationRead): LocationDraft {
+function locationFromEscort(escort: EscortRead): LocationDraft {
   return {
-    city: location.city,
-    neighborhood: location.neighborhood ?? "",
-    accepts_displacement: location.accepts_displacement,
+    place_name: escort.place_name ?? "",
+    place_address: escort.place_address ?? "",
+    place_reference_points: escort.place_reference_points ?? "",
+    accepts_displacement: escort.accepts_displacement,
     displacement_fee_brl:
-      location.displacement_fee_cents !== null ? centsToBrl(location.displacement_fee_cents) : "",
-  };
-}
-
-function preferenceToDraft(preference: EscortPreferenceRead): PreferenceDraft {
-  return { key: preference.key, value: preference.value };
-}
-
-function availabilityToDraft(availability: EscortAvailabilityRead): AvailabilityDraft {
-  return {
-    min_duration_minutes:
-      availability.min_duration_minutes !== null ? String(availability.min_duration_minutes) : "",
-    advance_booking_minutes:
-      availability.advance_booking_minutes !== null
-        ? String(availability.advance_booking_minutes)
+      escort.displacement_fee_cents !== null
+        ? centsToBrl(escort.displacement_fee_cents)
         : "",
-    max_bookings_per_day:
-      availability.max_bookings_per_day !== null ? String(availability.max_bookings_per_day) : "",
   };
 }
 
@@ -1078,13 +831,6 @@ function parseLanguages(text: string): string[] {
 function parseIntOrZero(value: string): number {
   const parsed = parseInt(value.trim(), 10);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function parseIntOrNull(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = parseInt(trimmed, 10);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function brlToCents(value: string): number {
