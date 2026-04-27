@@ -5,24 +5,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   ConversationRead,
-  HandoffSummaryRead,
   PaginatedEnvelope,
   UrgencyProfile,
 } from "@/contracts";
 import { bffFetch, type BffFetchError } from "@/features/shared/bff-client";
 import { ConfirmModal } from "@/features/shared/confirm-modal";
-import { formatCurrency, formatDateTime, formatNumber, formatRelativeSeconds } from "@/features/shared/formatters";
+import { formatNumber } from "@/features/shared/formatters";
 import {
-  acknowledgeHandoff,
   handoffActionMessage,
   releaseHandoff,
 } from "@/features/shared/handoff-actions";
 import {
-  clientStatusLabel,
   conversationStateLabel,
-  flowTypeLabel,
   handoffReasonLabel,
-  handoffStatusLabel,
   urgencyProfileLabel,
 } from "@/features/shared/labels";
 
@@ -36,64 +31,26 @@ type SlaGroupKey = "overdue" | "attention" | "within";
 type ListFilters = {
   urgencyProfile: "" | UrgencyProfile;
   q: string;
-  minAmount: string;
-  maxAmount: string;
 };
 
-function parseAmountInput(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed.replace(",", "."));
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return parsed;
-}
-
 type Loaded = {
-  summary: HandoffSummaryRead | null;
   opened: PaginatedEnvelope<ConversationRead> | null;
   acknowledged: PaginatedEnvelope<ConversationRead> | null;
   errors: {
-    summary: BffFetchError | null;
     opened: BffFetchError | null;
     acknowledged: BffFetchError | null;
   };
 };
 
-type PendingRelease = {
-  conversation: ConversationRead;
-};
+type PendingRelease = { conversation: ConversationRead };
 
-const EMPTY_FILTERS: ListFilters = {
-  urgencyProfile: "",
-  q: "",
-  minAmount: "",
-  maxAmount: "",
-};
+const EMPTY_FILTERS: ListFilters = { urgencyProfile: "", q: "" };
 
 const INITIAL: Loaded = {
-  summary: null,
   opened: null,
   acknowledged: null,
-  errors: { summary: null, opened: null, acknowledged: null },
+  errors: { opened: null, acknowledged: null },
 };
-
-const SLA_GROUPS: Array<{ key: SlaGroupKey; title: string; description: string }> = [
-  {
-    key: "overdue",
-    title: "Atrasados",
-    description: "Passaram do tempo ideal de resposta humana.",
-  },
-  {
-    key: "attention",
-    title: "Atenção",
-    description: "Estão perto do SLA. Assuma antes de virar atraso.",
-  },
-  {
-    key: "within",
-    title: "Dentro do prazo",
-    description: "Ainda dentro da janela operacional.",
-  },
-];
 
 const URGENCY_PROFILE_OPTIONS: UrgencyProfile[] = [
   "IMMEDIATE",
@@ -110,73 +67,33 @@ export function HandoffsClient() {
   const [pendingRelease, setPendingRelease] = useState<PendingRelease | null>(null);
   const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
 
-  const load = useCallback(async (active: ListFilters) => {
-    const min = parseAmountInput(active.minAmount);
-    const max = parseAmountInput(active.maxAmount);
-    const amountSuffix = buildAmountQuery(min, max);
-    const [summary, opened, acknowledged] = await Promise.all([
-      bffFetch<HandoffSummaryRead>("/api/operator/handoffs/summary?window=7d"),
+  const load = useCallback(async () => {
+    const [opened, acknowledged] = await Promise.all([
       bffFetch<PaginatedEnvelope<ConversationRead>>(
-        `/api/operator/conversations?handoff_status=OPENED&page_size=${PAGE_SIZE}${amountSuffix}`,
+        `/api/operator/conversations?handoff_status=OPENED&page_size=${PAGE_SIZE}`,
       ),
       bffFetch<PaginatedEnvelope<ConversationRead>>(
-        `/api/operator/conversations?handoff_status=ACKNOWLEDGED&page_size=${PAGE_SIZE}${amountSuffix}`,
+        `/api/operator/conversations?handoff_status=ACKNOWLEDGED&page_size=${PAGE_SIZE}`,
       ),
     ]);
     setLoaded({
-      summary: summary.data,
       opened: opened.data,
       acknowledged: acknowledged.data,
-      errors: {
-        summary: summary.error,
-        opened: opened.error,
-        acknowledged: acknowledged.error,
-      },
+      errors: { opened: opened.error, acknowledged: acknowledged.error },
     });
     setFirstLoad(false);
   }, []);
 
-  const amountRangeError = useMemo(() => {
-    const min = parseAmountInput(filters.minAmount);
-    const max = parseAmountInput(filters.maxAmount);
-    if (min !== null && max !== null && min > max) {
-      return "O valor mínimo não pode ser maior que o máximo.";
-    }
-    return null;
-  }, [filters.minAmount, filters.maxAmount]);
-
   useEffect(() => {
-    if (amountRangeError) {
-      return;
-    }
-    void load(filters);
-    const id = window.setInterval(() => {
-      void load(filters);
-    }, POLL_INTERVAL_MS);
+    void load();
+    const id = window.setInterval(() => void load(), POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
-  }, [amountRangeError, filters, load]);
-
-  const onAcknowledge = useCallback(
-    async (conversation: ConversationRead) => {
-      setBusyId(conversation.id);
-      setAction(null);
-      const result = await acknowledgeHandoff(conversation.id);
-      setBusyId(null);
-      if (result.error) {
-        setAction(handoffActionMessage("acknowledge", result.error.status));
-      } else {
-        setAction(`Você assumiu ${leadName(conversation)}. Responda o lead antes de devolver para a IA.`);
-      }
-      await load(filters);
-    },
-    [filters, load],
-  );
+  }, [load]);
 
   const onConfirmRelease = useCallback(async () => {
-    if (!pendingRelease) {
-      return;
-    }
+    if (!pendingRelease) return;
     const conversation = pendingRelease.conversation;
+    const wasCancellation = conversation.handoff_status === "OPENED";
     setBusyId(conversation.id);
     setAction(null);
     const result = await releaseHandoff(conversation.id);
@@ -185,37 +102,32 @@ export function HandoffsClient() {
     if (result.error) {
       setAction(handoffActionMessage("release", result.error.status));
     } else {
-      setAction(`${leadName(conversation)} voltou para atendimento da IA.`);
+      setAction(
+        wasCancellation
+          ? `Escalada de ${leadName(conversation)} cancelada. A IA volta a responder.`
+          : `${leadName(conversation)} voltou para atendimento da IA.`,
+      );
     }
-    await load(filters);
-  }, [filters, load, pendingRelease]);
+    await load();
+  }, [load, pendingRelease]);
 
   const waitingLeads = useMemo(
     () => applyFilters(loaded.opened?.items ?? [], filters).sort(compareSlaPriority),
     [filters, loaded.opened],
   );
-
   const activeLeads = useMemo(
-    () => applyFilters(loaded.acknowledged?.items ?? [], filters).sort(compareSlaPriority),
+    () => applyFilters(loaded.acknowledged?.items ?? [], filters).sort(compareByAgeDesc),
     [filters, loaded.acknowledged],
   );
 
-  const grouped = useMemo(() => groupBySla(waitingLeads), [waitingLeads]);
-  const filtersActive = Boolean(
-    filters.q.trim() ||
-      filters.urgencyProfile ||
-      filters.minAmount.trim() ||
-      filters.maxAmount.trim(),
-  );
-  const overdueCount = grouped.overdue.length;
-  const attentionCount = grouped.attention.length;
-  const nextLead = waitingLeads[0] ?? null;
+  const filtersActive = Boolean(filters.q.trim() || filters.urgencyProfile);
+  const oldestWaiting = waitingLeads[0] ?? null;
 
   if (firstLoad) {
     return (
       <div className="panel" role="status">
         <div className="panel-heading">
-          <h2>Carregando leads para assumir</h2>
+          <h2>Carregando fila de exceções</h2>
           <span className="badge muted">Buscando</span>
         </div>
       </div>
@@ -226,75 +138,60 @@ export function HandoffsClient() {
     <div className="section-stack">
       {action ? <div className="panel-notice warning">{action}</div> : null}
 
-      <section className="handoff-command">
-        <div className="handoff-command-copy">
-          <p className="eyebrow">Fila operacional</p>
-          <h2>Leads para assumir</h2>
-          <p>Leads que a IA encaminhou para atendimento humano, ordenados por SLA e urgência.</p>
-        </div>
-        <div className="handoff-command-metrics">
-          <QueueMetric label="Aguardando humano" value={loaded.opened?.total ?? 0} tone={overdueCount > 0 ? "danger" : "default"} />
-          <QueueMetric label="Atrasados" value={overdueCount} tone={overdueCount > 0 ? "danger" : "default"} />
-          <QueueMetric label="Atenção" value={attentionCount} tone={attentionCount > 0 ? "warning" : "default"} />
-          <QueueMetric
-            label="Próximo SLA"
-            value={nextLead ? slaClockLabel(nextLead) : "-"}
-            tone={nextLead && slaGroupFor(nextLead) !== "within" ? "warning" : "default"}
-          />
-        </div>
-      </section>
+      <StatusStrip
+        waiting={waitingLeads.length}
+        active={activeLeads.length}
+        oldestWaiting={oldestWaiting}
+      />
 
       <HandoffFilters
         filters={filters}
-        totalLoaded={(loaded.opened?.items.length ?? 0) + (loaded.acknowledged?.items.length ?? 0)}
-        totalAfter={waitingLeads.length + activeLeads.length}
-        amountRangeError={amountRangeError}
+        filtersActive={filtersActive}
         onChange={setFilters}
         onReset={() => setFilters(EMPTY_FILTERS)}
       />
 
       {loaded.errors.opened ? <div className="panel-notice">{loaded.errors.opened.message}</div> : null}
-      {loaded.errors.summary ? <div className="panel-notice">{loaded.errors.summary.message}</div> : null}
 
-      {waitingLeads.length === 0 ? (
-        <HandoffEmptyState filtersActive={filtersActive} onReset={() => setFilters(EMPTY_FILTERS)} />
-      ) : (
-        <div className="sla-board">
-          {SLA_GROUPS.map((group) => (
-            <SlaGroup
-              key={group.key}
-              title={group.title}
-              description={group.description}
-              groupKey={group.key}
-              items={grouped[group.key]}
-              busyId={busyId}
-              onAcknowledge={onAcknowledge}
-            />
-          ))}
-        </div>
-      )}
+      <WaitingSection
+        items={waitingLeads}
+        busyId={busyId}
+        filtersActive={filtersActive}
+        onCancelEscalation={(conversation) => setPendingRelease({ conversation })}
+        onReset={() => setFilters(EMPTY_FILTERS)}
+      />
 
-      <ActiveHumanSection
+      {loaded.errors.acknowledged ? <div className="panel-notice">{loaded.errors.acknowledged.message}</div> : null}
+
+      <ActiveSection
         items={activeLeads}
-        total={loaded.acknowledged?.total ?? 0}
-        error={loaded.errors.acknowledged}
         busyId={busyId}
         filtersActive={filtersActive}
         onRelease={(conversation) => setPendingRelease({ conversation })}
       />
 
-      <SummaryPanel summary={loaded.summary} />
-
       {pendingRelease ? (
         <ConfirmModal
-          title="Devolver lead para a IA"
+          title={
+            pendingRelease.conversation.handoff_status === "OPENED"
+              ? "Cancelar escalada"
+              : "Devolver lead para a IA"
+          }
           description={
             <div className="stack-sm">
-              <p>A IA volta a responder automaticamente. Confirma que o atendimento humano terminou?</p>
+              <p>
+                {pendingRelease.conversation.handoff_status === "OPENED"
+                  ? "A escalada foi aberta por engano ou não precisa mais da modelo. A IA volta a responder automaticamente."
+                  : "A IA volta a responder automaticamente. Confirma que o atendimento humano terminou?"}
+              </p>
               <dl className="kv-list">
                 <div>
                   <dt>Lead</dt>
                   <dd>{leadName(pendingRelease.conversation)}</dd>
+                </div>
+                <div>
+                  <dt>Modelo</dt>
+                  <dd>{pendingRelease.conversation.escort.display_name}</dd>
                 </div>
                 <div>
                   <dt>Etapa</dt>
@@ -307,7 +204,11 @@ export function HandoffsClient() {
               </dl>
             </div>
           }
-          confirmLabel="Devolver para IA"
+          confirmLabel={
+            pendingRelease.conversation.handoff_status === "OPENED"
+              ? "Cancelar escalada"
+              : "Devolver para IA"
+          }
           tone="danger"
           loading={busyId === pendingRelease.conversation.id}
           onConfirm={() => void onConfirmRelease()}
@@ -318,36 +219,62 @@ export function HandoffsClient() {
   );
 }
 
+function StatusStrip({
+  waiting,
+  active,
+  oldestWaiting,
+}: {
+  waiting: number;
+  active: number;
+  oldestWaiting: ConversationRead | null;
+}) {
+  const oldestLabel =
+    oldestWaiting && ageMinutes(oldestWaiting) > 0
+      ? `mais antigo há ${formatMinutes(ageMinutes(oldestWaiting))}`
+      : null;
+  const oldestTone = oldestWaiting
+    ? slaGroupFor(oldestWaiting) === "overdue"
+      ? "danger"
+      : slaGroupFor(oldestWaiting) === "attention"
+        ? "warning"
+        : "ok"
+    : "muted";
+
+  return (
+    <section className="panel compact-panel" aria-label="Status da fila de exceções">
+      <div className="status-strip">
+        <span className="status-strip-item">
+          <strong>{formatNumber(waiting)}</strong> aguardando
+        </span>
+        <span className="status-strip-separator" aria-hidden="true">·</span>
+        <span className="status-strip-item">
+          <strong>{formatNumber(active)}</strong> em atendimento
+        </span>
+        {oldestLabel ? (
+          <>
+            <span className="status-strip-separator" aria-hidden="true">·</span>
+            <span className={`badge ${oldestTone}`}>{oldestLabel}</span>
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function HandoffFilters({
   filters,
-  totalLoaded,
-  totalAfter,
-  amountRangeError,
+  filtersActive,
   onChange,
   onReset,
 }: {
   filters: ListFilters;
-  totalLoaded: number;
-  totalAfter: number;
-  amountRangeError: string | null;
+  filtersActive: boolean;
   onChange: (next: ListFilters) => void;
   onReset: () => void;
 }) {
-  const active = Boolean(
-    filters.q.trim() ||
-      filters.urgencyProfile ||
-      filters.minAmount.trim() ||
-      filters.maxAmount.trim(),
-  );
   return (
     <section className="panel compact-panel">
-      <div className="panel-heading compact">
-        <h2>Busca rápida</h2>
-        <span className="badge muted">
-          {active ? `${formatNumber(totalAfter)} de ${formatNumber(totalLoaded)}` : `${formatNumber(totalLoaded)} carregados`}
-        </span>
-      </div>
-      <div className="handoff-filter-row" aria-label="Filtros de leads para assumir">
+      <div className="handoff-filter-row" aria-label="Filtros da fila de exceções">
         <label className="search-field">
           <span className="visually-hidden">Buscar lead</span>
           <input
@@ -373,84 +300,46 @@ function HandoffFilters({
             ))}
           </select>
         </label>
-        <label>
-          <span>Valor mínimo (R$)</span>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={filters.minAmount}
-            onChange={(event) => onChange({ ...filters, minAmount: event.target.value })}
-            placeholder="0,00"
-          />
-        </label>
-        <label>
-          <span>Valor máximo (R$)</span>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={filters.maxAmount}
-            onChange={(event) => onChange({ ...filters, maxAmount: event.target.value })}
-            placeholder="0,00"
-          />
-        </label>
-        <button className="button secondary" type="button" onClick={onReset} disabled={!active}>
+        <button className="button secondary" type="button" onClick={onReset} disabled={!filtersActive}>
           Limpar filtros
         </button>
       </div>
-      {amountRangeError ? (
-        <div className="panel-notice warning" role="alert">
-          {amountRangeError}
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function buildAmountQuery(min: number | null, max: number | null): string {
-  const parts: string[] = [];
-  if (min !== null) parts.push(`min_amount=${encodeURIComponent(String(min))}`);
-  if (max !== null) parts.push(`max_amount=${encodeURIComponent(String(max))}`);
-  return parts.length ? `&${parts.join("&")}` : "";
-}
-
-function SlaGroup({
-  title,
-  description,
-  groupKey,
+function WaitingSection({
   items,
   busyId,
-  onAcknowledge,
+  filtersActive,
+  onCancelEscalation,
+  onReset,
 }: {
-  title: string;
-  description: string;
-  groupKey: SlaGroupKey;
   items: ConversationRead[];
   busyId: string | null;
-  onAcknowledge: (conversation: ConversationRead) => Promise<void>;
+  filtersActive: boolean;
+  onCancelEscalation: (conversation: ConversationRead) => void;
+  onReset: () => void;
 }) {
   return (
-    <section className={`sla-column ${groupKey}`}>
-      <div className="sla-column-header">
+    <section className="panel">
+      <div className="panel-heading">
         <div>
-          <h2>{title}</h2>
-          <p>{description}</p>
+          <h2>Aguardando a modelo</h2>
+          <p className="section-subtitle">A IA escalou e está em silêncio. O reconhecimento vem do WhatsApp da modelo.</p>
         </div>
-        <span className={groupKey === "overdue" ? "badge danger" : groupKey === "attention" ? "badge warning" : "badge muted"}>
-          {items.length}
-        </span>
+        <span className={items.length > 0 ? "badge danger" : "badge muted"}>{formatNumber(items.length)}</span>
       </div>
       {items.length === 0 ? (
-        <p className="empty-state">{emptySlaText(groupKey)}</p>
+        <HandoffEmptyState filtersActive={filtersActive} onReset={onReset} />
       ) : (
         <div className="handoff-card-list">
           {items.map((conversation) => (
-            <HandoffCard
+            <WaitingCard
               key={conversation.id}
               conversation={conversation}
               busy={busyId === conversation.id}
-              onAcknowledge={() => void onAcknowledge(conversation)}
+              onCancelEscalation={() => onCancelEscalation(conversation)}
             />
           ))}
         </div>
@@ -459,18 +348,20 @@ function SlaGroup({
   );
 }
 
-function HandoffCard({
+function WaitingCard({
   conversation,
   busy,
-  onAcknowledge,
+  onCancelEscalation,
 }: {
   conversation: ConversationRead;
   busy: boolean;
-  onAcknowledge: () => void;
+  onCancelEscalation: () => void;
 }) {
   const group = slaGroupFor(conversation);
   const reason = handoffReasonGuess(conversation);
-  const summary = conversation.summary || conversation.last_message?.content_preview || "Sem resumo registrado para esta conversa.";
+  const summary =
+    conversation.summary || conversation.last_message?.content_preview || "";
+  const waitingMinutes = ageMinutes(conversation);
 
   return (
     <article className={`handoff-card ${group}`}>
@@ -479,7 +370,10 @@ function HandoffCard({
           <h3>{leadName(conversation)}</h3>
           <p>{conversation.client.whatsapp_jid}</p>
         </div>
-        <SlaBadge conversation={conversation} />
+        <div className="handoff-card-badges">
+          <SlaBadge conversation={conversation} />
+          <UrgencyChip conversation={conversation} />
+        </div>
       </header>
 
       <div className="handoff-card-reason">
@@ -487,56 +381,34 @@ function HandoffCard({
         <strong>{reason}</strong>
       </div>
 
-      <p className="handoff-summary">{truncate(summary, 150)}</p>
-
-      <dl className="handoff-facts">
-        <div>
-          <dt>Urgência</dt>
-          <dd><UrgencyBadge conversation={conversation} /></dd>
-        </div>
-        <div>
-          <dt>SLA</dt>
-          <dd>{slaClockLabel(conversation)}</dd>
-        </div>
-        <div>
-          <dt>Esperando</dt>
-          <dd>{formatRelativeSeconds(handoffStartedAt(conversation))}</dd>
-        </div>
-        <div>
-          <dt>Etapa</dt>
-          <dd>{conversationStateLabel(conversation.state)}</dd>
-        </div>
-      </dl>
+      {summary ? <p className="handoff-summary">{truncate(summary, 110)}</p> : null}
 
       <div className="handoff-card-chips">
-        <span className="chip">{flowTypeLabel(conversation.flow_type)}</span>
-        {conversation.expected_amount ? <span className="chip gold">{formatCurrency(conversation.expected_amount)}</span> : null}
-        {conversation.client.client_status ? <span className="chip">{clientStatusLabel(conversation.client.client_status)}</span> : null}
+        <span className="chip">Para: {conversation.escort.display_name}</span>
+        <span className="chip">
+          aguardando há {waitingMinutes > 0 ? formatMinutes(waitingMinutes) : "poucos segundos"}
+        </span>
       </div>
 
       <div className="handoff-card-actions">
-        <button className="button handoff-primary" type="button" disabled={busy} onClick={onAcknowledge}>
-          Assumir agora
-        </button>
-        <Link className="button secondary" href={`/conversas/${conversation.id}`}>
+        <Link className="button handoff-primary" href={`/conversas/${conversation.id}`}>
           Ver conversa
         </Link>
+        <button className="button danger" type="button" disabled={busy} onClick={onCancelEscalation}>
+          Cancelar escalada
+        </button>
       </div>
     </article>
   );
 }
 
-function ActiveHumanSection({
+function ActiveSection({
   items,
-  total,
-  error,
   busyId,
   filtersActive,
   onRelease,
 }: {
   items: ConversationRead[];
-  total: number;
-  error: BffFetchError | null;
   busyId: string | null;
   filtersActive: boolean;
   onRelease: (conversation: ConversationRead) => void;
@@ -545,49 +417,69 @@ function ActiveHumanSection({
     <section className="panel">
       <div className="panel-heading">
         <div>
-          <h2>Em atendimento humano</h2>
-          <p className="section-subtitle">Leads já assumidos que ainda não voltaram para a IA.</p>
+          <h2>Em atendimento pela modelo</h2>
+          <p className="section-subtitle">A modelo já respondeu ou reconheceu. IA segue em silêncio até a devolução.</p>
         </div>
-        <span className="badge warning">{formatNumber(total)}</span>
+        <span className={items.length > 0 ? "badge warning" : "badge muted"}>{formatNumber(items.length)}</span>
       </div>
-      {error ? <div className="panel-notice">{error.message}</div> : null}
       {items.length === 0 ? (
         <p className="empty-state">
           {filtersActive
             ? "Nenhum atendimento humano bate com os filtros."
-            : "Nenhum lead está em atendimento humano agora."}
+            : "Nenhum lead está em atendimento pela modelo agora."}
         </p>
       ) : (
         <div className="active-handoff-list">
           {items.map((conversation) => (
-            <article className="active-handoff-item" key={conversation.id}>
-              <div>
-                <h3>{leadName(conversation)}</h3>
-                <p>{truncate(conversation.summary || conversation.last_message?.content_preview || "-", 120)}</p>
-                <div className="handoff-card-chips">
-                  <span className="chip warning">{handoffStatusLabel(conversation.handoff_status)}</span>
-                  <span className="chip">{conversationStateLabel(conversation.state)}</span>
-                  <span className="chip">há {formatRelativeSeconds(handoffStartedAt(conversation))}</span>
-                </div>
-              </div>
-              <div className="inline-actions">
-                <Link className="button secondary" href={`/conversas/${conversation.id}`}>
-                  Ver conversa
-                </Link>
-                <button
-                  className="button danger"
-                  type="button"
-                  disabled={busyId === conversation.id}
-                  onClick={() => onRelease(conversation)}
-                >
-                  Devolver para IA
-                </button>
-              </div>
-            </article>
+            <ActiveCard
+              key={conversation.id}
+              conversation={conversation}
+              busy={busyId === conversation.id}
+              onRelease={() => onRelease(conversation)}
+            />
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function ActiveCard({
+  conversation,
+  busy,
+  onRelease,
+}: {
+  conversation: ConversationRead;
+  busy: boolean;
+  onRelease: () => void;
+}) {
+  const reason = handoffReasonGuess(conversation);
+  const summary =
+    conversation.summary || conversation.last_message?.content_preview || "";
+  const minutes = ageMinutes(conversation);
+
+  return (
+    <article className="active-handoff-item">
+      <div>
+        <h3>{leadName(conversation)}</h3>
+        <p className="handoff-active-reason">
+          <span>Motivo:</span> <strong>{reason}</strong>
+        </p>
+        {summary ? <p className="handoff-active-summary">{truncate(summary, 110)}</p> : null}
+        <div className="handoff-card-chips">
+          <span className="chip">Por: {conversation.escort.display_name}</span>
+          <span className="chip warning">em atendimento há {minutes > 0 ? formatMinutes(minutes) : "poucos segundos"}</span>
+        </div>
+      </div>
+      <div className="inline-actions">
+        <Link className="button secondary" href={`/conversas/${conversation.id}`}>
+          Ver conversa
+        </Link>
+        <button className="button danger" type="button" disabled={busy} onClick={onRelease}>
+          Devolver para IA
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -602,11 +494,11 @@ function HandoffEmptyState({
     <div className="empty-state-card">
       <span className="empty-state-icon" aria-hidden="true" />
       <div className="empty-state-copy">
-        <strong>{filtersActive ? "Nenhum lead encontrado" : "Nenhum lead aguardando atendimento humano"}</strong>
+        <strong>{filtersActive ? "Nenhum lead encontrado" : "Nenhuma escalada aguardando a modelo"}</strong>
         <p>
           {filtersActive
             ? "Tente remover filtros ou buscar por outro nome, telefone, motivo ou resumo."
-            : "Quando a IA transferir uma conversa para atendimento humano, ela aparecerá nesta fila com motivo, urgência e SLA."}
+            : "Quando a IA escalar uma conversa, ela aparecerá aqui com motivo, urgência e SLA até a modelo reconhecer pelo WhatsApp."}
         </p>
       </div>
       {filtersActive ? (
@@ -618,72 +510,27 @@ function HandoffEmptyState({
   );
 }
 
-function SummaryPanel({ summary }: { summary: HandoffSummaryRead | null }) {
-  if (!summary) {
-    return null;
-  }
-  const reasons = Object.entries(summary.reasons.counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4);
-
-  return (
-    <details className="analytics-accordion">
-      <summary>Resumo dos handoffs nos últimos 7 dias</summary>
-      <div className="performance-strip analytics-grid">
-        <QueueMetric label="Abertos" value={summary.current_by_status.counts.OPENED ?? 0} tone="default" />
-        <QueueMetric label="Assumidos" value={summary.current_by_status.counts.ACKNOWLEDGED ?? 0} tone="default" />
-        <QueueMetric label="4h+" value={summary.open_age_buckets.counts["4h+"] ?? 0} tone="warning" />
-        <QueueMetric label="Tempo médio" value={formatDurationSeconds(summary.time_to_acknowledge?.average_seconds)} tone="default" />
-      </div>
-      {reasons.length > 0 ? (
-        <div className="handoff-reason-strip">
-          {reasons.map(([reason, value]) => (
-            <span className="chip" key={reason}>
-              {handoffReasonLabel(reason) || reason}: {formatNumber(value)}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </details>
-  );
-}
-
-function QueueMetric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number | string;
-  tone: "default" | "warning" | "danger";
-}) {
-  return (
-    <div className={`metric compact ${tone === "default" ? "" : tone}`}>
-      <span className="metric-label">{label}</span>
-      <span className="metric-value">{typeof value === "number" ? formatNumber(value) : value}</span>
-    </div>
-  );
-}
-
 function SlaBadge({ conversation }: { conversation: ConversationRead }) {
   const group = slaGroupFor(conversation);
   if (group === "overdue") {
-    return <span className="badge danger">Atrasado</span>;
+    const over = ageMinutes(conversation) - SLA_MINUTES;
+    return <span className="badge danger">Atrasado · {formatMinutes(Math.max(0, over))}</span>;
   }
   if (group === "attention") {
-    return <span className="badge warning">Atenção</span>;
+    const left = SLA_MINUTES - ageMinutes(conversation);
+    return <span className="badge warning">SLA em {formatMinutes(Math.max(0, left))}</span>;
   }
   return <span className="badge ok">No prazo</span>;
 }
 
-function UrgencyBadge({ conversation }: { conversation: ConversationRead }) {
+function UrgencyChip({ conversation }: { conversation: ConversationRead }) {
   if (conversation.urgency_profile === "IMMEDIATE") {
-    return <span className="chip danger">Alta</span>;
+    return <span className="chip danger">Urgência alta</span>;
   }
   if (conversation.urgency_profile === "SCHEDULED" || conversation.urgency_profile === "ESTIMATED_TIME") {
-    return <span className="chip warning">Média</span>;
+    return <span className="chip warning">Urgência média</span>;
   }
-  return <span className="chip">Baixa</span>;
+  return null;
 }
 
 function applyFilters(items: ConversationRead[], filters: ListFilters): ConversationRead[] {
@@ -711,22 +558,19 @@ function applyFilters(items: ConversationRead[], filters: ListFilters): Conversa
   });
 }
 
-function groupBySla(items: ConversationRead[]): Record<SlaGroupKey, ConversationRead[]> {
-  return {
-    overdue: items.filter((item) => slaGroupFor(item) === "overdue"),
-    attention: items.filter((item) => slaGroupFor(item) === "attention"),
-    within: items.filter((item) => slaGroupFor(item) === "within"),
-  };
-}
-
 function compareSlaPriority(a: ConversationRead, b: ConversationRead): number {
   return slaPriority(b) - slaPriority(a) || ageMinutes(b) - ageMinutes(a);
 }
 
+function compareByAgeDesc(a: ConversationRead, b: ConversationRead): number {
+  return ageMinutes(b) - ageMinutes(a);
+}
+
 function slaPriority(conversation: ConversationRead): number {
   let score = 0;
-  if (slaGroupFor(conversation) === "overdue") score += 100;
-  if (slaGroupFor(conversation) === "attention") score += 50;
+  const group = slaGroupFor(conversation);
+  if (group === "overdue") score += 100;
+  else if (group === "attention") score += 50;
   if (conversation.urgency_profile === "IMMEDIATE") score += 25;
   if (conversation.expected_amount) score += 10;
   return score;
@@ -734,32 +578,16 @@ function slaPriority(conversation: ConversationRead): number {
 
 function slaGroupFor(conversation: ConversationRead): SlaGroupKey {
   const minutes = ageMinutes(conversation);
-  if (minutes >= SLA_MINUTES) {
-    return "overdue";
-  }
-  if (minutes >= SLA_ATTENTION_MINUTES) {
-    return "attention";
-  }
+  if (minutes >= SLA_MINUTES) return "overdue";
+  if (minutes >= SLA_ATTENTION_MINUTES) return "attention";
   return "within";
-}
-
-function slaClockLabel(conversation: ConversationRead): string {
-  const minutes = ageMinutes(conversation);
-  if (minutes >= SLA_MINUTES) {
-    return `atrasado há ${Math.floor(minutes - SLA_MINUTES)}m`;
-  }
-  return `vence em ${Math.max(0, Math.ceil(SLA_MINUTES - minutes))}m`;
 }
 
 function ageMinutes(conversation: ConversationRead): number {
   const startedAt = handoffStartedAt(conversation);
-  if (!startedAt) {
-    return 0;
-  }
+  if (!startedAt) return 0;
   const timestamp = new Date(startedAt).getTime();
-  if (Number.isNaN(timestamp)) {
-    return 0;
-  }
+  if (Number.isNaN(timestamp)) return 0;
   return Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
 }
 
@@ -787,34 +615,15 @@ function leadName(conversation: ConversationRead): string {
   return conversation.client.display_name || conversation.client.whatsapp_jid;
 }
 
-function emptySlaText(groupKey: SlaGroupKey): string {
-  if (groupKey === "overdue") {
-    return "Nenhum lead passou do SLA.";
-  }
-  if (groupKey === "attention") {
-    return "Nenhum lead está perto do SLA.";
-  }
-  return "Nenhum lead dentro do prazo com os filtros atuais.";
-}
-
 function truncate(value: string, limit: number): string {
-  if (value.length <= limit) {
-    return value;
-  }
+  if (value.length <= limit) return value;
   return `${value.slice(0, limit - 1)}...`;
 }
 
-function formatDurationSeconds(value: number | null | undefined): string {
-  if (value === null || value === undefined) {
-    return "-";
-  }
-  if (value < 60) {
-    return `${value}s`;
-  }
-  const minutes = Math.floor(value / 60);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
+function formatMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
+

@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -24,15 +24,26 @@ from barra_vips_contracts.v1 import (
     DashboardHealthRead,
     DashboardFinancialTimeseriesRead,
     DashboardSummaryRead,
+    EscortAvailabilityRead,
+    EscortDetailRead,
+    EscortRead,
     EvolutionConnectionUpdate,
     EvolutionMessagesUpsert,
     EvolutionStatusRead,
+    FinancialDivergenceAging,
+    FinancialLargestDivergence,
+    FinancialMatchRateMetric,
+    FinancialPaymentLagMetric,
+    FinancialReceiptStatusBreakdown,
+    FinancialRevenueFunnel,
+    FinancialSnapshotRead,
+    FinancialWindowKey,
     HandoffActionRead,
     HandoffSummaryRead,
     HealthStatusRead,
     MediaRead,
+    MediaTagRead,
     MediaUsageSummaryRead,
-    ModelRead,
     PaginatedEnvelope,
     ReceiptRead,
     ScheduleSlotRead,
@@ -42,7 +53,9 @@ from barra_vips_contracts.v1 import (
 
 from .config import settings
 from .db import get_conn
+from .evolution_client import EvolutionClient, EvolutionClientError, get_evolution_client
 from .media import MIME_EXTENSIONS, MEDIA_TYPES, detect_mime, ensure_inside
+from .qr_buffer import qr_buffer
 
 
 class ScheduleBlockRequest(BaseModel):
@@ -52,31 +65,64 @@ class ScheduleBlockRequest(BaseModel):
     reason: str | None = None
 
 
+class ScheduleSlotPatchRequest(BaseModel):
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    reason: str | None = None
+
+
+class ScheduleSlotCancelRequest(BaseModel):
+    reason: str | None = None
+
+
 class MediaPatchRequest(BaseModel):
-    category: str | None = None
-    approval_status: str | None = None
-    send_constraints_json: dict[str, Any] | None = None
+    is_active: bool | None = None
+    tags: list[str] | None = None
     metadata_json: dict[str, Any] | None = None
 
 
-class ModelCreateRequest(BaseModel):
+class EscortCreateRequest(BaseModel):
     display_name: str = Field(min_length=1)
     is_active: bool = False
-    persona_json: dict[str, Any] = Field(default_factory=dict)
-    services_json: dict[str, Any] = Field(default_factory=dict)
-    pricing_json: dict[str, Any] = Field(default_factory=dict)
     languages: list[str] = Field(default_factory=list)
     calendar_external_id: str | None = None
+    photo_main_path: str | None = None
 
 
-class ModelPatchRequest(BaseModel):
+class EscortPatchRequest(BaseModel):
     display_name: str | None = None
     is_active: bool | None = None
-    persona_json: dict[str, Any] | None = None
-    services_json: dict[str, Any] | None = None
-    pricing_json: dict[str, Any] | None = None
     languages: list[str] | None = None
     calendar_external_id: str | None = None
+    photo_main_path: str | None = None
+
+
+class EscortServiceInput(BaseModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    duration_minutes: int = Field(gt=0)
+    price_cents: int = Field(ge=0)
+    restrictions: str | None = None
+    sort_order: int = 0
+
+
+class EscortLocationInput(BaseModel):
+    city: str = Field(min_length=1)
+    neighborhood: str | None = None
+    accepts_displacement: bool = False
+    displacement_fee_cents: int | None = Field(default=None, ge=0)
+    sort_order: int = 0
+
+
+class EscortPreferenceInput(BaseModel):
+    key: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+
+
+class EscortAvailabilityInput(BaseModel):
+    min_duration_minutes: int | None = Field(default=None, gt=0)
+    advance_booking_minutes: int | None = Field(default=None, ge=0)
+    max_bookings_per_day: int | None = Field(default=None, gt=0)
 
 
 def require_operator_api_key(
@@ -109,9 +155,9 @@ CONVERSATION_QUEUE_KEYS = {
     "AWAITING_CLIENT_DECISION",
     "EXTERNAL_OPEN_HANDOFF",
 }
-MODEL_SELECT_COLUMNS = """
-    id, display_name, is_active, persona_json, services_json, pricing_json,
-    languages, calendar_external_id, created_at, updated_at
+ESCORT_SELECT_COLUMNS = """
+    id, display_name, is_active, languages, calendar_external_id,
+    photo_main_path, created_at, updated_at
 """
 
 
@@ -121,7 +167,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["authorization", "content-type", "x-operator-api-key"],
     )
     app.include_router(api)
@@ -135,18 +181,18 @@ def health(conn: Connection[dict[str, Any]] = Depends(get_conn)) -> dict[str, An
     return {"status": "ok", "database": "ok", "checked_at": _now()}
 
 
-@api.get("/models", response_model=PaginatedEnvelope[ModelRead])
-def list_models(
+@api.get("/escorts", response_model=PaginatedEnvelope[EscortRead])
+def list_escorts(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=100),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
     params = {"limit": page_size, "offset": (page - 1) * page_size}
-    total = _count(conn, "SELECT count(*) FROM app.models")
+    total = _count(conn, "SELECT count(*) FROM app.escorts")
     items = conn.execute(
         f"""
-        SELECT {MODEL_SELECT_COLUMNS}
-        FROM app.models
+        SELECT {ESCORT_SELECT_COLUMNS}
+        FROM app.escorts
         ORDER BY is_active DESC, updated_at DESC, id DESC
         LIMIT %(limit)s OFFSET %(offset)s
         """,
@@ -155,76 +201,139 @@ def list_models(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@api.post("/models", response_model=ModelRead)
-def create_model(
-    body: ModelCreateRequest,
+@api.post("/escorts", response_model=EscortRead)
+def create_escort(
+    body: EscortCreateRequest,
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
     params = {
-        "display_name": _clean_model_display_name(body.display_name),
+        "display_name": _clean_escort_display_name(body.display_name),
         "is_active": body.is_active,
-        "persona_json": Jsonb(body.persona_json),
-        "services_json": Jsonb(body.services_json),
-        "pricing_json": Jsonb(body.pricing_json),
-        "languages": _clean_model_languages(body.languages),
+        "languages": _clean_escort_languages(body.languages),
         "calendar_external_id": _clean_calendar_external_id(body.calendar_external_id),
+        "photo_main_path": _clean_optional_text(body.photo_main_path),
     }
     with conn.transaction():
         if params["is_active"]:
             conn.execute(
                 """
-                UPDATE app.models
+                UPDATE app.escorts
                 SET is_active = false, updated_at = now()
                 WHERE is_active = true
                 """
             )
         row = conn.execute(
             f"""
-            INSERT INTO app.models (
+            INSERT INTO app.escorts (
                 display_name,
                 is_active,
-                persona_json,
-                services_json,
-                pricing_json,
                 languages,
-                calendar_external_id
+                calendar_external_id,
+                photo_main_path
             )
             VALUES (
                 %(display_name)s,
                 %(is_active)s,
-                %(persona_json)s,
-                %(services_json)s,
-                %(pricing_json)s,
                 %(languages)s,
-                %(calendar_external_id)s
+                %(calendar_external_id)s,
+                %(photo_main_path)s
             )
-            RETURNING {MODEL_SELECT_COLUMNS}
+            RETURNING {ESCORT_SELECT_COLUMNS}
             """,
             params,
         ).fetchone()
+        conn.execute(
+            "INSERT INTO app.escort_availability (escort_id) VALUES (%(id)s)",
+            {"id": row["id"]},
+        )
     return row
 
 
-@api.get("/models/active", response_model=ModelRead)
-def get_active_model(conn: Connection[dict[str, Any]] = Depends(get_conn)) -> dict[str, Any]:
+@api.get("/escorts/active", response_model=EscortRead)
+def get_active_escort(conn: Connection[dict[str, Any]] = Depends(get_conn)) -> dict[str, Any]:
     row = conn.execute(
-        """
-        SELECT id, display_name, is_active, persona_json, services_json, pricing_json,
-               languages, calendar_external_id, created_at, updated_at
-        FROM app.models
+        f"""
+        SELECT {ESCORT_SELECT_COLUMNS}
+        FROM app.escorts
         WHERE is_active = true
         LIMIT 1
         """
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="active model not found")
+        raise HTTPException(status_code=404, detail="active escort not found")
     return row
 
 
-@api.patch("/models/{model_id}", response_model=ModelRead)
-def patch_model(
-    model_id: uuid.UUID,
-    body: ModelPatchRequest,
+@api.get("/escorts/{escort_id}", response_model=EscortDetailRead)
+def get_escort_detail(
+    escort_id: uuid.UUID,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    escort = conn.execute(
+        f"SELECT {ESCORT_SELECT_COLUMNS} FROM app.escorts WHERE id = %(id)s",
+        {"id": escort_id},
+    ).fetchone()
+    if escort is None:
+        raise HTTPException(status_code=404, detail="escort not found")
+
+    services = conn.execute(
+        """
+        SELECT id, name, description, duration_minutes, price_cents,
+               restrictions, sort_order
+        FROM app.escort_services
+        WHERE escort_id = %(id)s
+        ORDER BY sort_order, name
+        """,
+        {"id": escort_id},
+    ).fetchall()
+
+    locations = conn.execute(
+        """
+        SELECT id, city, neighborhood, accepts_displacement,
+               displacement_fee_cents, sort_order
+        FROM app.escort_locations
+        WHERE escort_id = %(id)s
+        ORDER BY sort_order, city
+        """,
+        {"id": escort_id},
+    ).fetchall()
+
+    preferences = conn.execute(
+        """
+        SELECT key, value
+        FROM app.escort_preferences
+        WHERE escort_id = %(id)s
+        ORDER BY key
+        """,
+        {"id": escort_id},
+    ).fetchall()
+
+    availability = conn.execute(
+        """
+        SELECT min_duration_minutes, advance_booking_minutes, max_bookings_per_day
+        FROM app.escort_availability
+        WHERE escort_id = %(id)s
+        """,
+        {"id": escort_id},
+    ).fetchone() or {
+        "min_duration_minutes": None,
+        "advance_booking_minutes": None,
+        "max_bookings_per_day": None,
+    }
+
+    return {
+        "escort": escort,
+        "services": services,
+        "locations": locations,
+        "preferences": preferences,
+        "availability": availability,
+    }
+
+
+@api.patch("/escorts/{escort_id}", response_model=EscortRead)
+def patch_escort(
+    escort_id: uuid.UUID,
+    body: EscortPatchRequest,
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
     updates = body.model_dump(exclude_unset=True)
@@ -232,59 +341,225 @@ def patch_model(
         raise HTTPException(status_code=400, detail="empty patch")
 
     if "display_name" in updates:
-        updates["display_name"] = _clean_model_display_name(updates["display_name"])
+        updates["display_name"] = _clean_escort_display_name(updates["display_name"])
     if "languages" in updates:
-        updates["languages"] = _clean_model_languages(updates["languages"])
+        updates["languages"] = _clean_escort_languages(updates["languages"])
     if "calendar_external_id" in updates:
         updates["calendar_external_id"] = _clean_calendar_external_id(updates["calendar_external_id"])
+    if "photo_main_path" in updates:
+        updates["photo_main_path"] = _clean_optional_text(updates["photo_main_path"])
 
-    allowed = {
-        "display_name",
-        "is_active",
-        "persona_json",
-        "services_json",
-        "pricing_json",
-        "languages",
-        "calendar_external_id",
-    }
-    sets = []
-    params: dict[str, Any] = {"id": model_id}
-    for field, value in updates.items():
-        if field not in allowed:
-            continue
-        sets.append(f"{field} = %({field})s")
-        params[field] = Jsonb(value) if field.endswith("_json") else value
-    if not sets:
-        raise HTTPException(status_code=400, detail="empty patch")
+    sets = [f"{field} = %({field})s" for field in updates]
+    params: dict[str, Any] = {"id": escort_id, **updates}
 
     with conn.transaction():
         existing = conn.execute(
-            "SELECT id FROM app.models WHERE id = %(id)s FOR UPDATE",
-            {"id": model_id},
+            "SELECT id FROM app.escorts WHERE id = %(id)s FOR UPDATE",
+            {"id": escort_id},
         ).fetchone()
         if existing is None:
-            raise HTTPException(status_code=404, detail="model not found")
+            raise HTTPException(status_code=404, detail="escort not found")
 
         if updates.get("is_active") is True:
             conn.execute(
                 """
-                UPDATE app.models
+                UPDATE app.escorts
                 SET is_active = false, updated_at = now()
                 WHERE is_active = true AND id <> %(id)s
                 """,
-                {"id": model_id},
+                {"id": escort_id},
             )
 
         row = conn.execute(
             f"""
-            UPDATE app.models
+            UPDATE app.escorts
             SET {", ".join(sets)}, updated_at = now()
             WHERE id = %(id)s
-            RETURNING {MODEL_SELECT_COLUMNS}
+            RETURNING {ESCORT_SELECT_COLUMNS}
             """,
             params,
         ).fetchone()
     return row
+
+
+@api.put("/escorts/{escort_id}/services", response_model=list[dict])
+def replace_escort_services(
+    escort_id: uuid.UUID,
+    body: list[EscortServiceInput],
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> list[dict[str, Any]]:
+    with conn.transaction():
+        _ensure_escort_exists(conn, escort_id)
+        conn.execute(
+            "DELETE FROM app.escort_services WHERE escort_id = %(id)s",
+            {"id": escort_id},
+        )
+        for index, item in enumerate(body):
+            conn.execute(
+                """
+                INSERT INTO app.escort_services (
+                    escort_id, name, description, duration_minutes,
+                    price_cents, restrictions, sort_order
+                ) VALUES (
+                    %(escort_id)s, %(name)s, %(description)s, %(duration_minutes)s,
+                    %(price_cents)s, %(restrictions)s, %(sort_order)s
+                )
+                """,
+                {
+                    "escort_id": escort_id,
+                    "name": item.name.strip(),
+                    "description": _clean_optional_text(item.description),
+                    "duration_minutes": item.duration_minutes,
+                    "price_cents": item.price_cents,
+                    "restrictions": _clean_optional_text(item.restrictions),
+                    "sort_order": item.sort_order or index,
+                },
+            )
+        rows = conn.execute(
+            """
+            SELECT id, name, description, duration_minutes, price_cents,
+                   restrictions, sort_order
+            FROM app.escort_services
+            WHERE escort_id = %(id)s
+            ORDER BY sort_order, name
+            """,
+            {"id": escort_id},
+        ).fetchall()
+    return rows
+
+
+@api.put("/escorts/{escort_id}/locations", response_model=list[dict])
+def replace_escort_locations(
+    escort_id: uuid.UUID,
+    body: list[EscortLocationInput],
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> list[dict[str, Any]]:
+    with conn.transaction():
+        _ensure_escort_exists(conn, escort_id)
+        conn.execute(
+            "DELETE FROM app.escort_locations WHERE escort_id = %(id)s",
+            {"id": escort_id},
+        )
+        for index, item in enumerate(body):
+            conn.execute(
+                """
+                INSERT INTO app.escort_locations (
+                    escort_id, city, neighborhood, accepts_displacement,
+                    displacement_fee_cents, sort_order
+                ) VALUES (
+                    %(escort_id)s, %(city)s, %(neighborhood)s, %(accepts_displacement)s,
+                    %(displacement_fee_cents)s, %(sort_order)s
+                )
+                """,
+                {
+                    "escort_id": escort_id,
+                    "city": item.city.strip(),
+                    "neighborhood": _clean_optional_text(item.neighborhood),
+                    "accepts_displacement": item.accepts_displacement,
+                    "displacement_fee_cents": item.displacement_fee_cents,
+                    "sort_order": item.sort_order or index,
+                },
+            )
+        rows = conn.execute(
+            """
+            SELECT id, city, neighborhood, accepts_displacement,
+                   displacement_fee_cents, sort_order
+            FROM app.escort_locations
+            WHERE escort_id = %(id)s
+            ORDER BY sort_order, city
+            """,
+            {"id": escort_id},
+        ).fetchall()
+    return rows
+
+
+@api.put("/escorts/{escort_id}/preferences", response_model=list[dict])
+def replace_escort_preferences(
+    escort_id: uuid.UUID,
+    body: list[EscortPreferenceInput],
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> list[dict[str, Any]]:
+    with conn.transaction():
+        _ensure_escort_exists(conn, escort_id)
+        conn.execute(
+            "DELETE FROM app.escort_preferences WHERE escort_id = %(id)s",
+            {"id": escort_id},
+        )
+        seen: set[str] = set()
+        for item in body:
+            key = item.key.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            conn.execute(
+                """
+                INSERT INTO app.escort_preferences (escort_id, key, value)
+                VALUES (%(escort_id)s, %(key)s, %(value)s)
+                """,
+                {
+                    "escort_id": escort_id,
+                    "key": key,
+                    "value": item.value.strip(),
+                },
+            )
+        rows = conn.execute(
+            """
+            SELECT key, value
+            FROM app.escort_preferences
+            WHERE escort_id = %(id)s
+            ORDER BY key
+            """,
+            {"id": escort_id},
+        ).fetchall()
+    return rows
+
+
+@api.put("/escorts/{escort_id}/availability", response_model=EscortAvailabilityRead)
+def update_escort_availability(
+    escort_id: uuid.UUID,
+    body: EscortAvailabilityInput,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    with conn.transaction():
+        _ensure_escort_exists(conn, escort_id)
+        conn.execute(
+            """
+            INSERT INTO app.escort_availability (
+                escort_id, min_duration_minutes, advance_booking_minutes, max_bookings_per_day
+            ) VALUES (
+                %(escort_id)s, %(min_duration_minutes)s, %(advance_booking_minutes)s, %(max_bookings_per_day)s
+            )
+            ON CONFLICT (escort_id) DO UPDATE SET
+                min_duration_minutes = EXCLUDED.min_duration_minutes,
+                advance_booking_minutes = EXCLUDED.advance_booking_minutes,
+                max_bookings_per_day = EXCLUDED.max_bookings_per_day,
+                updated_at = now()
+            """,
+            {
+                "escort_id": escort_id,
+                "min_duration_minutes": body.min_duration_minutes,
+                "advance_booking_minutes": body.advance_booking_minutes,
+                "max_bookings_per_day": body.max_bookings_per_day,
+            },
+        )
+        row = conn.execute(
+            """
+            SELECT min_duration_minutes, advance_booking_minutes, max_bookings_per_day
+            FROM app.escort_availability
+            WHERE escort_id = %(id)s
+            """,
+            {"id": escort_id},
+        ).fetchone()
+    return row
+
+
+def _ensure_escort_exists(conn: Connection[dict[str, Any]], escort_id: uuid.UUID) -> None:
+    row = conn.execute(
+        "SELECT id FROM app.escorts WHERE id = %(id)s FOR UPDATE",
+        {"id": escort_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="escort not found")
 
 
 @api.get("/dashboard/summary", response_model=DashboardSummaryRead)
@@ -453,17 +728,9 @@ def get_dashboard_summary(
     ).fetchone()
 
     total_media = _count(conn, "SELECT count(*) FROM app.media_assets")
-    media_pending = _count(
+    media_active = _count(
         conn,
-        "SELECT count(*) FROM app.media_assets WHERE approval_status = 'PENDING'",
-    )
-    media_without_category = _count(
-        conn,
-        """
-        SELECT count(*)
-        FROM app.media_assets
-        WHERE category IS NULL OR btrim(category) = ''
-        """,
+        "SELECT count(*) FROM app.media_assets WHERE is_active = true",
     )
 
     schedule_params = {
@@ -695,15 +962,9 @@ def get_dashboard_summary(
             window="all_time",
             sample_size=total_conversations,
         ),
-        "media_pending": _metric(
-            media_pending,
-            source="app.media_assets.approval_status",
-            window="all_time",
-            sample_size=total_media,
-        ),
-        "media_without_category": _metric(
-            media_without_category,
-            source="app.media_assets.category",
+        "media_active": _metric(
+            media_active,
+            source="app.media_assets.is_active",
             window="all_time",
             sample_size=total_media,
         ),
@@ -852,11 +1113,320 @@ def get_dashboard_summary(
     }
 
 
+FINANCIAL_WINDOW_TO_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90}
+
+
+RECEIPT_STATUS_KEYS = ("VALID", "UNCERTAIN", "INVALID", "NEEDS_REVIEW", "PENDING")
+DIVERGENCE_AGING_THRESHOLD_DAYS = 5
+
+
+@api.get("/dashboard/financial", response_model=FinancialSnapshotRead)
+def get_dashboard_financial(
+    window: FinancialWindowKey = Query(default="30d"),
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    days = FINANCIAL_WINDOW_TO_DAYS[window]
+    bounds = conn.execute(
+        """
+        SELECT
+          now() AS generated_at,
+          now() - (%(days)s::int) * INTERVAL '1 day' AS starts_at,
+          now() AS ends_at
+        """,
+        {"days": days},
+    ).fetchone()
+    window_params = {
+        "starts_at": bounds["starts_at"],
+        "ends_at": bounds["ends_at"],
+    }
+
+    open_pipeline_row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(expected_amount), 0) AS total_value,
+          count(*)::int AS sample_size,
+          COALESCE(SUM(expected_amount) FILTER (WHERE state = 'NOVO'), 0) AS novo,
+          COALESCE(SUM(expected_amount) FILTER (WHERE state = 'QUALIFICANDO'), 0) AS qualificando,
+          COALESCE(SUM(expected_amount) FILTER (WHERE state = 'NEGOCIANDO'), 0) AS negociando
+        FROM app.conversations
+        WHERE state IN ('NOVO','QUALIFICANDO','NEGOCIANDO')
+        """
+    ).fetchone()
+    open_pipeline_total_value = Decimal(open_pipeline_row["total_value"] or 0)
+    open_pipeline_count = int(open_pipeline_row["sample_size"] or 0)
+    open_pipeline_by_state = {
+        "NOVO": Decimal(open_pipeline_row["novo"] or 0),
+        "QUALIFICANDO": Decimal(open_pipeline_row["qualificando"] or 0),
+        "NEGOCIANDO": Decimal(open_pipeline_row["negociando"] or 0),
+    }
+
+    receipts_row = conn.execute(
+        """
+        SELECT
+          count(*)::int AS total_count,
+          count(*) FILTER (WHERE analysis_status = 'VALID')::int AS valid_count,
+          COALESCE(SUM(detected_amount) FILTER (WHERE analysis_status = 'VALID'), 0) AS detected_total,
+          COALESCE(SUM(detected_amount) FILTER (WHERE detected_amount IS NOT NULL), 0) AS received_total,
+          count(*) FILTER (
+            WHERE detected_amount IS NOT NULL AND expected_amount IS NOT NULL
+          )::int AS divergence_sample_size,
+          COALESCE(
+            SUM(abs(detected_amount - expected_amount)) FILTER (
+              WHERE detected_amount IS NOT NULL AND expected_amount IS NOT NULL
+            ),
+            0
+          ) AS divergence_abs
+        FROM app.receipts
+        WHERE created_at >= %(starts_at)s AND created_at < %(ends_at)s
+        """,
+        window_params,
+    ).fetchone()
+
+    receipts_status_rows = conn.execute(
+        """
+        SELECT
+          analysis_status,
+          count(*)::int AS count,
+          COALESCE(SUM(detected_amount), 0) AS amount
+        FROM app.receipts
+        WHERE created_at >= %(starts_at)s AND created_at < %(ends_at)s
+        GROUP BY analysis_status
+        """,
+        window_params,
+    ).fetchall()
+    receipts_by_status_counts = {key: 0 for key in RECEIPT_STATUS_KEYS}
+    receipts_by_status_amounts = {key: Decimal("0") for key in RECEIPT_STATUS_KEYS}
+    for row in receipts_status_rows:
+        key = row["analysis_status"]
+        if key in receipts_by_status_counts:
+            receipts_by_status_counts[key] = int(row["count"] or 0)
+            receipts_by_status_amounts[key] = Decimal(row["amount"] or 0)
+
+    payment_lag_row = conn.execute(
+        """
+        SELECT
+          AVG(EXTRACT(EPOCH FROM (r.created_at - c.created_at)) / 86400.0)::float AS avg_days,
+          count(*)::int AS sample_size
+        FROM app.receipts r
+        JOIN app.conversations c ON c.id = r.conversation_id
+        WHERE r.analysis_status = 'VALID'
+          AND r.created_at >= %(starts_at)s
+          AND r.created_at < %(ends_at)s
+        """,
+        window_params,
+    ).fetchone()
+
+    largest_divergence_row = conn.execute(
+        """
+        SELECT
+          r.id AS receipt_id,
+          r.conversation_id,
+          cl.display_name AS client_display_name,
+          r.expected_amount,
+          r.detected_amount,
+          ABS(r.detected_amount - r.expected_amount) AS diff_abs,
+          GREATEST(EXTRACT(EPOCH FROM (now() - r.created_at)) / 86400.0, 0)::int AS age_days
+        FROM app.receipts r
+        JOIN app.clients cl ON cl.id = r.client_id
+        WHERE r.expected_amount IS NOT NULL
+          AND r.detected_amount IS NOT NULL
+          AND r.expected_amount <> r.detected_amount
+          AND r.created_at >= %(starts_at)s
+          AND r.created_at < %(ends_at)s
+        ORDER BY ABS(r.detected_amount - r.expected_amount) DESC, r.created_at ASC
+        LIMIT 1
+        """,
+        window_params,
+    ).fetchone()
+
+    aging_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (
+            WHERE r.created_at <= now() - (%(threshold)s::int) * INTERVAL '1 day'
+          )::int AS aged_count,
+          COALESCE(
+            SUM(ABS(r.detected_amount - r.expected_amount)) FILTER (
+              WHERE r.created_at <= now() - (%(threshold)s::int) * INTERVAL '1 day'
+            ),
+            0
+          ) AS aged_amount
+        FROM app.receipts r
+        WHERE r.expected_amount IS NOT NULL
+          AND r.detected_amount IS NOT NULL
+          AND r.expected_amount <> r.detected_amount
+          AND r.created_at >= %(starts_at)s
+          AND r.created_at < %(ends_at)s
+        """,
+        {**window_params, "threshold": DIVERGENCE_AGING_THRESHOLD_DAYS},
+    ).fetchone()
+
+    closed_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(expected_amount), 0) AS total
+        FROM app.conversations
+        WHERE state = 'CONFIRMADO'
+          AND created_at >= %(starts_at)s
+          AND created_at < %(ends_at)s
+        """,
+        window_params,
+    ).fetchone()
+    closed_amount = Decimal(closed_row["total"] or 0)
+
+    conversion_row = conn.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE state = 'CONFIRMADO')::int AS converted_count,
+          count(*) FILTER (WHERE state IN ('CONFIRMADO', 'ESCALADO'))::int AS terminal_count
+        FROM app.conversations
+        WHERE created_at >= now() - INTERVAL '30 days' AND created_at < now()
+        """
+    ).fetchone()
+    conversion_converted = int(conversion_row["converted_count"] or 0)
+    conversion_terminal = int(conversion_row["terminal_count"] or 0)
+
+    forecast_minimum_sample = 10
+    if conversion_terminal >= forecast_minimum_sample:
+        forecast_value: Decimal | None = (
+            open_pipeline_total_value
+            * Decimal(conversion_converted)
+            / Decimal(conversion_terminal)
+        ).quantize(Decimal("0.01"))
+    else:
+        forecast_value = None
+
+    receipts_total_count = int(receipts_row["total_count"] or 0)
+    receipts_valid_count = int(receipts_row["valid_count"] or 0)
+    detected_total_value = Decimal(receipts_row["detected_total"] or 0)
+    received_total_value = Decimal(receipts_row["received_total"] or 0)
+    divergence_abs_value = Decimal(receipts_row["divergence_abs"] or 0)
+    divergence_sample_size = int(receipts_row["divergence_sample_size"] or 0)
+
+    if receipts_total_count > 0:
+        match_rate_percent: int | None = int(
+            round((receipts_valid_count / receipts_total_count) * 100)
+        )
+    else:
+        match_rate_percent = None
+
+    payment_lag_avg_days = (
+        float(payment_lag_row["avg_days"])
+        if payment_lag_row["avg_days"] is not None
+        else None
+    )
+
+    largest_divergence_payload: dict[str, Any] | None = None
+    if largest_divergence_row is not None:
+        largest_divergence_payload = {
+            "receipt_id": largest_divergence_row["receipt_id"],
+            "conversation_id": largest_divergence_row["conversation_id"],
+            "client_display_name": largest_divergence_row["client_display_name"],
+            "expected_amount": Decimal(largest_divergence_row["expected_amount"] or 0),
+            "detected_amount": Decimal(largest_divergence_row["detected_amount"] or 0),
+            "diff_abs": Decimal(largest_divergence_row["diff_abs"] or 0),
+            "age_days": int(largest_divergence_row["age_days"] or 0),
+            "drilldown_href": f"/conversas/{largest_divergence_row['conversation_id']}",
+        }
+
+    return {
+        "generated_at": bounds["generated_at"],
+        "requested_window": window,
+        "window_starts_at": bounds["starts_at"],
+        "window_ends_at": bounds["ends_at"],
+        "open_pipeline_total": _amount_metric(
+            open_pipeline_total_value,
+            source="app.conversations.expected_amount (open states)",
+            window="all_time",
+            sample_size=open_pipeline_count,
+        ),
+        "open_pipeline_by_state": _amount_breakdown(
+            open_pipeline_by_state,
+            source="app.conversations.expected_amount grouped by state (open states)",
+            window="all_time",
+            sample_size=open_pipeline_count,
+        ),
+        "detected_total": _amount_metric(
+            detected_total_value,
+            source="app.receipts.detected_amount sum of VALID in window",
+            window="requested",
+            sample_size=receipts_valid_count,
+        ),
+        "divergence_abs": _amount_metric(
+            divergence_abs_value,
+            source="app.receipts abs(detected-expected) sum in window",
+            window="requested",
+            sample_size=divergence_sample_size,
+        ),
+        "projected_revenue": {
+            "value": forecast_value,
+            "minimum_sample_size": forecast_minimum_sample,
+            "meta": {
+                "source": "open_pipeline_total * conversion_rate_last_30d",
+                "window": "last_30_days",
+                "sample_method": "full_aggregate",
+                "sample_size": conversion_terminal,
+            },
+        },
+        "receipts_by_status": {
+            "counts": receipts_by_status_counts,
+            "amounts": receipts_by_status_amounts,
+            "meta": {
+                "source": "app.receipts grouped by analysis_status in window",
+                "window": "requested",
+                "sample_method": "full_aggregate",
+                "sample_size": receipts_total_count,
+            },
+        },
+        "receipt_match_rate": {
+            "value_percent": match_rate_percent,
+            "numerator": receipts_valid_count,
+            "denominator": receipts_total_count,
+            "meta": {
+                "source": "app.receipts VALID / total in window",
+                "window": "requested",
+                "sample_method": "full_aggregate",
+                "sample_size": receipts_total_count,
+            },
+        },
+        "payment_lag": {
+            "average_days": payment_lag_avg_days,
+            "sample_size": int(payment_lag_row["sample_size"] or 0),
+            "meta": {
+                "source": "avg(receipts.created_at - conversations.created_at) on VALID receipts",
+                "window": "requested",
+                "sample_method": "full_aggregate",
+                "sample_size": int(payment_lag_row["sample_size"] or 0),
+            },
+        },
+        "largest_divergence": largest_divergence_payload,
+        "divergence_aging": {
+            "threshold_days": DIVERGENCE_AGING_THRESHOLD_DAYS,
+            "count": int(aging_row["aged_count"] or 0),
+            "total_amount": Decimal(aging_row["aged_amount"] or 0),
+        },
+        "revenue_funnel": {
+            "in_negotiation_amount": open_pipeline_total_value,
+            "closed_amount": closed_amount,
+            "receipt_received_amount": received_total_value,
+            "receipt_match_amount": detected_total_value,
+            "meta": {
+                "source": "open pipeline (current) -> conversations CONFIRMADO in window -> receipts in window -> receipts VALID in window",
+                "window": "requested",
+                "sample_method": "full_aggregate",
+                "sample_size": receipts_total_count,
+            },
+        },
+    }
+
+
 @api.get("/dashboard/financial/timeseries", response_model=DashboardFinancialTimeseriesRead)
 def get_dashboard_financial_timeseries(
     days: int = Query(default=30, ge=7, le=90),
+    window: FinancialWindowKey | None = Query(default=None),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
+    if window is not None:
+        days = FINANCIAL_WINDOW_TO_DAYS[window]
     bounds = conn.execute(
         """
         SELECT
@@ -947,8 +1517,8 @@ def get_dashboard_health(conn: Connection[dict[str, Any]] = Depends(get_conn)) -
     evolution = evolution_status(conn)
     calendar = calendar_status(conn)
     agent = agent_status(conn=conn)
-    active_model = _get_active_model_optional(conn)
-    model_pendencies = _count_model_pendencies(active_model)
+    active_model = _get_active_escort_optional(conn)
+    model_pendencies = _count_escort_pendencies(conn, active_model)
 
     if agent["total_executions"]["value"] == 0:
         agent_signal = {
@@ -1019,22 +1589,22 @@ def get_dashboard_health(conn: Connection[dict[str, Any]] = Depends(get_conn)) -
     if active_model is None:
         model_signal = {
             "status": "missing",
-            "label": "Sem agente",
-            "detail": "Nenhum agente ativo cadastrado.",
+            "label": "Sem acompanhante",
+            "detail": "Nenhuma acompanhante ativa cadastrada.",
             "checked_at": generated_at,
         }
     elif model_pendencies > 0:
         model_signal = {
             "status": "pending",
             "label": "Com pendências",
-            "detail": f"{model_pendencies} ajustes pendentes no agente {active_model['display_name']}.",
+            "detail": f"{model_pendencies} ajustes pendentes em {active_model['display_name']}.",
             "checked_at": active_model["updated_at"],
         }
     else:
         model_signal = {
             "status": "complete",
-            "label": "Configurado",
-            "detail": f"Agente {active_model['display_name']} pronto para operar.",
+            "label": "Configurada",
+            "detail": f"{active_model['display_name']} pronta para operar.",
             "checked_at": active_model["updated_at"],
         }
 
@@ -1253,7 +1823,7 @@ def list_conversations(
           lm.delivery_status AS last_delivery_status
         FROM app.conversations c
         JOIN app.clients cl ON cl.id = c.client_id
-        JOIN app.models mo ON mo.id = c.model_id
+        JOIN app.escorts mo ON mo.id = c.model_id
         LEFT JOIN LATERAL (
           SELECT direction, message_type, left(content_text, 240) AS content_preview,
                  created_at, delivery_status
@@ -1309,14 +1879,18 @@ def get_conversation(
     ).fetchall()
     media = conn.execute(
         """
-        SELECT ma.id, ma.model_id, ma.media_type, ma.category, ma.approval_status,
-               ma.metadata_json, ma.created_at, ma.updated_at
+        SELECT ma.id, ma.model_id, ma.media_type, ma.is_active,
+               ma.metadata_json, ma.created_at, ma.updated_at,
+               COALESCE(
+                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
+                 ARRAY[]::text[]
+               ) AS tags
         FROM app.media_assets ma
         WHERE ma.model_id = %(model_id)s
         ORDER BY ma.created_at DESC
         LIMIT 25
         """,
-        {"model_id": conversation["model"]["id"]},
+        {"model_id": conversation["escort"]["id"]},
     ).fetchall()
     agent_execution = conn.execute(
         """
@@ -1436,8 +2010,7 @@ def list_schedule_slots(
     params["offset"] = (page - 1) * page_size
     items = conn.execute(
         f"""
-        SELECT id, model_id, starts_at, ends_at, status, source, external_event_id,
-               calendar_sync_status, last_synced_at, last_sync_error
+        SELECT {SLOT_SELECT_COLUMNS}
         FROM app.schedule_slots
         {where}
         ORDER BY starts_at ASC, id ASC
@@ -1453,12 +2026,12 @@ def block_schedule_slot(
     body: ScheduleBlockRequest,
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
-    model_id = body.model_id or _active_model_id(conn)
+    model_id = body.model_id or _active_escort_id(conn)
     if model_id is None:
         raise HTTPException(status_code=409, detail="no active model")
     try:
         row = conn.execute(
-            """
+            f"""
             INSERT INTO app.schedule_slots (
               model_id, starts_at, ends_at, status, source,
               calendar_sync_status, metadata_json
@@ -1466,9 +2039,7 @@ def block_schedule_slot(
               %(model_id)s, %(starts_at)s, %(ends_at)s, 'BLOCKED', 'MANUAL',
               'PENDING', %(metadata_json)s
             )
-            RETURNING id, model_id, starts_at, ends_at, status, source,
-                      external_event_id, calendar_sync_status,
-                      last_synced_at, last_sync_error
+            RETURNING {SLOT_SELECT_COLUMNS}
             """,
             {
                 "model_id": model_id,
@@ -1482,16 +2053,159 @@ def block_schedule_slot(
     return row
 
 
+SLOT_SELECT_COLUMNS = """
+    id, model_id, starts_at, ends_at, status, source, external_event_id,
+    calendar_sync_status, last_synced_at, last_sync_error, metadata_json
+"""
+
+
+def _fetch_slot(conn: Connection[dict[str, Any]], slot_id: uuid.UUID) -> dict[str, Any]:
+    row = conn.execute(
+        f"SELECT {SLOT_SELECT_COLUMNS} FROM app.schedule_slots WHERE id = %(id)s",
+        {"id": slot_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="slot not found")
+    return row
+
+
+@api.patch("/schedule/slots/{slot_id}", response_model=ScheduleSlotRead)
+def patch_schedule_slot(
+    slot_id: uuid.UUID,
+    body: ScheduleSlotPatchRequest,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="empty patch")
+
+    current = _fetch_slot(conn, slot_id)
+    new_starts = updates.get("starts_at", current["starts_at"])
+    new_ends = updates.get("ends_at", current["ends_at"])
+    if new_ends <= new_starts:
+        raise HTTPException(status_code=422, detail="ends_at must be after starts_at")
+
+    metadata = dict(current.get("metadata_json") or {})
+    if "reason" in updates:
+        if updates["reason"]:
+            metadata["reason"] = updates["reason"]
+        else:
+            metadata.pop("reason", None)
+
+    try:
+        row = conn.execute(
+            f"""
+            UPDATE app.schedule_slots
+            SET starts_at = %(starts_at)s,
+                ends_at = %(ends_at)s,
+                metadata_json = %(metadata_json)s,
+                calendar_sync_status = 'PENDING',
+                updated_at = now()
+            WHERE id = %(id)s
+            RETURNING {SLOT_SELECT_COLUMNS}
+            """,
+            {
+                "id": slot_id,
+                "starts_at": new_starts,
+                "ends_at": new_ends,
+                "metadata_json": Jsonb(metadata),
+            },
+        ).fetchone()
+    except ExclusionViolation as exc:
+        raise HTTPException(status_code=409, detail="slot overlaps another blocked slot") from exc
+    return row
+
+
+@api.post("/schedule/slots/{slot_id}/confirm", response_model=ScheduleSlotRead)
+def confirm_schedule_slot(
+    slot_id: uuid.UUID,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    current = _fetch_slot(conn, slot_id)
+    if current["status"] != "HELD":
+        raise HTTPException(status_code=409, detail=f"cannot confirm slot in status {current['status']}")
+    row = conn.execute(
+        f"""
+        UPDATE app.schedule_slots
+        SET status = 'CONFIRMED',
+            calendar_sync_status = 'PENDING',
+            updated_at = now()
+        WHERE id = %(id)s
+        RETURNING {SLOT_SELECT_COLUMNS}
+        """,
+        {"id": slot_id},
+    ).fetchone()
+    return row
+
+
+@api.post("/schedule/slots/{slot_id}/cancel", response_model=ScheduleSlotRead)
+def cancel_schedule_slot(
+    slot_id: uuid.UUID,
+    body: ScheduleSlotCancelRequest,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> dict[str, Any]:
+    current = _fetch_slot(conn, slot_id)
+    if current["status"] not in ("HELD", "CONFIRMED"):
+        raise HTTPException(status_code=409, detail=f"cannot cancel slot in status {current['status']}")
+    metadata = dict(current.get("metadata_json") or {})
+    if body.reason:
+        metadata["cancel_reason"] = body.reason
+    row = conn.execute(
+        f"""
+        UPDATE app.schedule_slots
+        SET status = 'CANCELLED',
+            metadata_json = %(metadata_json)s,
+            calendar_sync_status = 'PENDING',
+            updated_at = now()
+        WHERE id = %(id)s
+        RETURNING {SLOT_SELECT_COLUMNS}
+        """,
+        {"id": slot_id, "metadata_json": Jsonb(metadata)},
+    ).fetchone()
+    return row
+
+
+@api.delete("/schedule/slots/{slot_id}", status_code=204)
+def delete_schedule_slot(
+    slot_id: uuid.UUID,
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> Response:
+    current = _fetch_slot(conn, slot_id)
+    if current["status"] != "BLOCKED":
+        raise HTTPException(
+            status_code=409,
+            detail="only blocked slots can be deleted; use cancel for held/confirmed",
+        )
+    conn.execute("DELETE FROM app.schedule_slots WHERE id = %(id)s", {"id": slot_id})
+    return Response(status_code=204)
+
+
 @api.post("/schedule/sync", response_model=ScheduleSyncRequestRead)
 def request_schedule_sync() -> dict[str, Any]:
     return {"status": "accepted", "mode": "manual_stub", "message": "calendar sync worker is outside Fase 2"}
+
+
+@api.get("/media/tags", response_model=list[MediaTagRead])
+def list_media_tags(
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+) -> list[dict[str, Any]]:
+    return conn.execute(
+        """
+        SELECT tag, display_label, sort_order
+        FROM app.media_tag_vocabulary
+        ORDER BY sort_order, tag
+        """
+    ).fetchall()
 
 
 @api.get("/media", response_model=PaginatedEnvelope[MediaRead])
 def list_media(
     model_id: uuid.UUID | None = None,
     type: str | None = None,
-    approval_status: str | None = None,
+    is_active: bool | None = None,
+    tag: str | None = None,
+    q: str | None = None,
+    never_sent: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
@@ -1499,23 +2213,41 @@ def list_media(
     conditions = []
     params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
     if model_id:
-        conditions.append("model_id = %(model_id)s")
+        conditions.append("ma.model_id = %(model_id)s")
         params["model_id"] = model_id
     if type:
-        conditions.append("media_type = %(type)s")
+        conditions.append("ma.media_type = %(type)s")
         params["type"] = type
-    if approval_status:
-        conditions.append("approval_status = %(approval_status)s")
-        params["approval_status"] = approval_status
+    if is_active is not None:
+        conditions.append("ma.is_active = %(is_active)s")
+        params["is_active"] = is_active
+    if tag:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM app.media_tags t WHERE t.media_id = ma.id AND t.tag = %(tag)s)"
+        )
+        params["tag"] = tag
+    if q:
+        conditions.append("ma.metadata_json->>'original_filename' ILIKE %(q)s")
+        params["q"] = f"%{q}%"
+    if never_sent:
+        conditions.append(
+            "NOT EXISTS (SELECT 1 FROM app.messages m WHERE m.media_id = ma.id)"
+        )
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
-    total = conn.execute(f"SELECT count(*) AS total FROM app.media_assets {where}", params).fetchone()["total"]
+    total = conn.execute(
+        f"SELECT count(*) AS total FROM app.media_assets ma {where}", params
+    ).fetchone()["total"]
     items = conn.execute(
         f"""
-        SELECT id, model_id, media_type, category, approval_status,
-               send_constraints_json, metadata_json, created_at, updated_at
-        FROM app.media_assets
+        SELECT ma.id, ma.model_id, ma.media_type, ma.is_active, ma.deactivated_at,
+               ma.metadata_json, ma.created_at, ma.updated_at,
+               COALESCE(
+                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
+                 ARRAY[]::text[]
+               ) AS tags
+        FROM app.media_assets ma
         {where}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY ma.created_at DESC, ma.id DESC
         LIMIT %(limit)s OFFSET %(offset)s
         """,
         params,
@@ -1526,6 +2258,7 @@ def list_media(
 @api.get("/media/usage-summary", response_model=MediaUsageSummaryRead)
 def get_media_usage_summary(
     window: Literal["7d"] = Query(default="7d"),
+    model_id: uuid.UUID | None = Query(default=None),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
     windows = conn.execute(
@@ -1536,65 +2269,57 @@ def get_media_usage_summary(
           now() AS requested_ends_at
         """
     ).fetchone()
-    params = {
+    params: dict[str, Any] = {
         "starts_at": windows["requested_starts_at"],
         "ends_at": windows["requested_ends_at"],
     }
+    model_filter_sql = ""
+    if model_id is not None:
+        model_filter_sql = " AND ma.model_id = %(model_id)s"
+        params["model_id"] = model_id
 
     total_media = _count(conn, "SELECT count(*) FROM app.media_assets")
-    pending = _count(
-        conn,
-        "SELECT count(*) FROM app.media_assets WHERE approval_status = 'PENDING'",
-    )
-    without_category = _count(
-        conn,
-        """
-        SELECT count(*)
-        FROM app.media_assets
-        WHERE category IS NULL OR btrim(category) = ''
-        """,
-    )
-    approved_total = _count(
-        conn,
-        "SELECT count(*) FROM app.media_assets WHERE approval_status = 'APPROVED'",
-    )
-    approved_rows = conn.execute(
-        """
-        SELECT COALESCE(NULLIF(btrim(category), ''), 'SEM_CATEGORIA') AS key,
-               count(*) AS value
-        FROM app.media_assets
-        WHERE approval_status = 'APPROVED'
-        GROUP BY COALESCE(NULLIF(btrim(category), ''), 'SEM_CATEGORIA')
-        ORDER BY key
-        """
-    ).fetchall()
-    approved_by_category = {row["key"]: int(row["value"]) for row in approved_rows}
+    if model_id is not None:
+        active_count = _count(
+            conn,
+            "SELECT count(*) FROM app.media_assets WHERE is_active = true AND model_id = %(model_id)s",
+            {"model_id": model_id},
+        )
+    else:
+        active_count = _count(
+            conn,
+            "SELECT count(*) FROM app.media_assets WHERE is_active = true",
+        )
 
     media_usage_sample = _count(
         conn,
-        """
+        f"""
         SELECT count(*)
-        FROM app.messages
-        WHERE media_id IS NOT NULL
-          AND COALESCE(provider_message_at, created_at) >= %(starts_at)s
-          AND COALESCE(provider_message_at, created_at) < %(ends_at)s
-        """,
-        params,
-    )
-    most_used_rows = conn.execute(
-        """
-        SELECT
-          ma.id AS media_id,
-          ma.media_type,
-          ma.category,
-          ma.approval_status,
-          count(m.id) AS count
         FROM app.messages m
         JOIN app.media_assets ma ON ma.id = m.media_id
         WHERE m.media_id IS NOT NULL
           AND COALESCE(m.provider_message_at, m.created_at) >= %(starts_at)s
-          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s
-        GROUP BY ma.id, ma.media_type, ma.category, ma.approval_status
+          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s{model_filter_sql}
+        """,
+        params,
+    )
+    most_used_rows = conn.execute(
+        f"""
+        SELECT
+          ma.id AS media_id,
+          ma.media_type,
+          ma.is_active,
+          count(m.id) AS count,
+          COALESCE(
+            (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
+            ARRAY[]::text[]
+          ) AS tags
+        FROM app.messages m
+        JOIN app.media_assets ma ON ma.id = m.media_id
+        WHERE m.media_id IS NOT NULL
+          AND COALESCE(m.provider_message_at, m.created_at) >= %(starts_at)s
+          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s{model_filter_sql}
+        GROUP BY ma.id, ma.media_type, ma.is_active
         ORDER BY count(m.id) DESC, ma.updated_at DESC, ma.id DESC
         LIMIT 5
         """,
@@ -1603,31 +2328,35 @@ def get_media_usage_summary(
 
     delivery_status_sample = _count(
         conn,
-        """
+        f"""
         SELECT count(*)
-        FROM app.messages
-        WHERE media_id IS NOT NULL
-          AND delivery_status IS NOT NULL
-          AND COALESCE(provider_message_at, created_at) >= %(starts_at)s
-          AND COALESCE(provider_message_at, created_at) < %(ends_at)s
+        FROM app.messages m
+        JOIN app.media_assets ma ON ma.id = m.media_id
+        WHERE m.media_id IS NOT NULL
+          AND m.delivery_status IS NOT NULL
+          AND COALESCE(m.provider_message_at, m.created_at) >= %(starts_at)s
+          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s{model_filter_sql}
         """,
         params,
     )
     failure_rows = conn.execute(
-        """
+        f"""
         SELECT
           ma.id AS media_id,
           ma.media_type,
-          ma.category,
-          ma.approval_status,
-          count(m.id) AS count
+          ma.is_active,
+          count(m.id) AS count,
+          COALESCE(
+            (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
+            ARRAY[]::text[]
+          ) AS tags
         FROM app.messages m
         JOIN app.media_assets ma ON ma.id = m.media_id
         WHERE m.media_id IS NOT NULL
           AND m.delivery_status = 'FAILED'
           AND COALESCE(m.provider_message_at, m.created_at) >= %(starts_at)s
-          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s
-        GROUP BY ma.id, ma.media_type, ma.category, ma.approval_status
+          AND COALESCE(m.provider_message_at, m.created_at) < %(ends_at)s{model_filter_sql}
+        GROUP BY ma.id, ma.media_type, ma.is_active
         ORDER BY count(m.id) DESC, ma.updated_at DESC, ma.id DESC
         LIMIT 5
         """,
@@ -1649,23 +2378,11 @@ def get_media_usage_summary(
         "requested_window": window,
         "delivery_status_available": delivery_status_sample > 0,
         "windows": response_windows,
-        "pending": _metric(
-            pending,
-            source="app.media_assets.approval_status",
+        "active": _metric(
+            active_count,
+            source="app.media_assets.is_active",
             window="all_time",
             sample_size=total_media,
-        ),
-        "without_category": _metric(
-            without_category,
-            source="app.media_assets.category",
-            window="all_time",
-            sample_size=total_media,
-        ),
-        "approved_by_category": _breakdown(
-            approved_by_category,
-            source="app.media_assets.approval_status + app.media_assets.category",
-            window="all_time",
-            sample_size=approved_total,
         ),
         "most_used": _media_usage_rank(
             most_used_rows,
@@ -1689,8 +2406,7 @@ def get_media_usage_summary(
 async def upload_media(
     file: UploadFile = File(...),
     model_id: uuid.UUID | None = Form(default=None),
-    category: str | None = Form(default=None),
-    approval_status: str = Form(default="PENDING"),
+    tags: list[str] = Form(default_factory=list),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
 ) -> dict[str, Any]:
     data = await file.read()
@@ -1699,9 +2415,11 @@ async def upload_media(
     detected_mime = detect_mime(data)
     if detected_mime not in MEDIA_TYPES:
         raise HTTPException(status_code=415, detail="unsupported media mime type")
-    selected_model_id = model_id or _active_model_id(conn)
+    selected_model_id = model_id or _active_escort_id(conn)
     if selected_model_id is None:
         raise HTTPException(status_code=409, detail="no active model")
+
+    normalized_tags = _validate_media_tags(conn, tags)
 
     media_id = uuid.uuid4()
     extension = MIME_EXTENSIONS[detected_mime]
@@ -1712,26 +2430,19 @@ async def upload_media(
     target.write_bytes(data)
 
     try:
-        row = conn.execute(
+        conn.execute(
             """
             INSERT INTO app.media_assets (
-              id, model_id, media_type, category, storage_path, approval_status,
-              send_constraints_json, metadata_json
+              id, model_id, media_type, storage_path, metadata_json
             ) VALUES (
-              %(id)s, %(model_id)s, %(media_type)s, %(category)s, %(storage_path)s,
-              %(approval_status)s, %(send_constraints_json)s, %(metadata_json)s
+              %(id)s, %(model_id)s, %(media_type)s, %(storage_path)s, %(metadata_json)s
             )
-            RETURNING id, model_id, media_type, category, approval_status,
-                      send_constraints_json, metadata_json, created_at, updated_at
             """,
             {
                 "id": media_id,
                 "model_id": selected_model_id,
                 "media_type": MEDIA_TYPES[detected_mime],
-                "category": category,
                 "storage_path": relative_path.as_posix(),
-                "approval_status": approval_status,
-                "send_constraints_json": Jsonb(_default_send_constraints(MEDIA_TYPES[detected_mime])),
                 "metadata_json": Jsonb(
                     {
                         "detected_mime": detected_mime,
@@ -1740,11 +2451,16 @@ async def upload_media(
                     }
                 ),
             },
-        ).fetchone()
+        )
+        for tag in normalized_tags:
+            conn.execute(
+                "INSERT INTO app.media_tags (media_id, tag) VALUES (%(id)s, %(tag)s)",
+                {"id": media_id, "tag": tag},
+            )
     except ForeignKeyViolation as exc:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=404, detail="model not found") from exc
-    return row
+    return _select_media(conn, media_id)
 
 
 @api.patch("/media/{media_id}", response_model=MediaRead)
@@ -1756,27 +2472,50 @@ def patch_media(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="empty patch")
-    allowed = {"category", "approval_status", "send_constraints_json", "metadata_json"}
+    exists = conn.execute(
+        "SELECT 1 FROM app.media_assets WHERE id = %(id)s", {"id": media_id}
+    ).fetchone()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="media not found")
+
     sets = []
     params: dict[str, Any] = {"id": media_id}
-    for field, value in updates.items():
-        if field not in allowed:
-            continue
-        sets.append(f"{field} = %({field})s")
-        params[field] = Jsonb(value) if field.endswith("_json") else value
-    row = conn.execute(
-        f"""
-        UPDATE app.media_assets
-        SET {", ".join(sets)}, updated_at = now()
-        WHERE id = %(id)s
-        RETURNING id, model_id, media_type, category, approval_status,
-                  send_constraints_json, metadata_json, created_at, updated_at
-        """,
-        params,
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="media not found")
-    return row
+    if "is_active" in updates:
+        sets.append("is_active = %(is_active)s")
+        params["is_active"] = bool(updates["is_active"])
+        sets.append(
+            "deactivated_at = CASE WHEN %(is_active)s THEN NULL ELSE now() END"
+        )
+    if "metadata_json" in updates:
+        sets.append("metadata_json = %(metadata_json)s")
+        params["metadata_json"] = Jsonb(updates["metadata_json"])
+
+    if sets:
+        conn.execute(
+            f"""
+            UPDATE app.media_assets
+            SET {", ".join(sets)}, updated_at = now()
+            WHERE id = %(id)s
+            """,
+            params,
+        )
+
+    if "tags" in updates:
+        normalized_tags = _validate_media_tags(conn, updates["tags"] or [])
+        conn.execute(
+            "DELETE FROM app.media_tags WHERE media_id = %(id)s", {"id": media_id}
+        )
+        for tag in normalized_tags:
+            conn.execute(
+                "INSERT INTO app.media_tags (media_id, tag) VALUES (%(id)s, %(tag)s)",
+                {"id": media_id, "tag": tag},
+            )
+        conn.execute(
+            "UPDATE app.media_assets SET updated_at = now() WHERE id = %(id)s",
+            {"id": media_id},
+        )
+
+    return _select_media(conn, media_id)
 
 
 @api.get("/media/{media_id}/content")
@@ -1814,6 +2553,8 @@ def list_receipts(
     min_amount: Annotated[Decimal | None, Query(ge=0)] = None,
     max_amount: Annotated[Decimal | None, Query(ge=0)] = None,
     amount_field: Literal["detected", "expected"] = "detected",
+    is_divergent: bool | None = None,
+    window: FinancialWindowKey | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     conn: Connection[dict[str, Any]] = Depends(get_conn),
@@ -1842,6 +2583,17 @@ def list_receipts(
     if max_amount is not None:
         conditions.append(f"{amount_column} <= %(max_amount)s")
         params["max_amount"] = max_amount
+    if is_divergent is True:
+        conditions.append(
+            "r.expected_amount IS NOT NULL "
+            "AND r.detected_amount IS NOT NULL "
+            "AND r.expected_amount <> r.detected_amount"
+        )
+    if window is not None:
+        conditions.append(
+            "r.created_at >= now() - (%(window_days)s::int) * INTERVAL '1 day'"
+        )
+        params["window_days"] = FINANCIAL_WINDOW_TO_DAYS[window]
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     total = conn.execute(
         f"""
@@ -1849,7 +2601,7 @@ def list_receipts(
         FROM app.receipts r
         JOIN app.conversations c ON c.id = r.conversation_id
         JOIN app.clients cl ON cl.id = r.client_id
-        JOIN app.models mo ON mo.id = c.model_id
+        JOIN app.escorts mo ON mo.id = c.model_id
         {where}
         """,
         params,
@@ -1866,7 +2618,7 @@ def list_receipts(
         FROM app.receipts r
         JOIN app.conversations c ON c.id = r.conversation_id
         JOIN app.clients cl ON cl.id = r.client_id
-        JOIN app.models mo ON mo.id = c.model_id
+        JOIN app.escorts mo ON mo.id = c.model_id
         {where}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT %(limit)s OFFSET %(offset)s
@@ -1885,22 +2637,88 @@ def list_receipts(
 def evolution_status(conn: Connection[dict[str, Any]] = Depends(get_conn)) -> dict[str, Any]:
     row = conn.execute(
         """
-        SELECT provider, instance, status, qr_code_ref, last_event_at, updated_at
+        SELECT provider, instance, status, qr_code_ref, last_event_at, updated_at, metadata_json
         FROM app.integration_status
         WHERE provider = 'evolution'
         ORDER BY updated_at DESC
         LIMIT 1
         """
     ).fetchone()
-    if row:
-        return row
+    if not row:
+        return {
+            "provider": "evolution",
+            "instance": settings.evolution_instance,
+            "status": "UNKNOWN",
+            "connected": False,
+            "qr_code_ref": None,
+            "qr_age_seconds": None,
+            "last_event_at": None,
+            "connected_since": None,
+            "updated_at": _now(),
+        }
+
+    metadata = row.get("metadata_json") or {}
+    connected_since_raw = metadata.get("connected_since") if isinstance(metadata, dict) else None
+    connected_since: datetime | None = None
+    if isinstance(connected_since_raw, str):
+        try:
+            connected_since = datetime.fromisoformat(connected_since_raw)
+        except ValueError:
+            connected_since = None
+
+    qr_age_seconds = qr_buffer.age_seconds() if row.get("qr_code_ref") else None
+
     return {
-        "provider": "evolution",
-        "instance": settings.evolution_instance,
-        "status": "UNKNOWN",
-        "qr_code_ref": None,
-        "last_event_at": None,
-        "updated_at": _now(),
+        "provider": row["provider"],
+        "instance": row["instance"],
+        "status": row["status"],
+        "connected": row["status"] == "CONNECTED",
+        "qr_code_ref": row["qr_code_ref"],
+        "qr_age_seconds": qr_age_seconds,
+        "last_event_at": row["last_event_at"],
+        "connected_since": connected_since,
+        "updated_at": row["updated_at"],
+    }
+
+
+@api.post("/integrations/evolution/connect")
+def evolution_connect(
+    conn: Connection[dict[str, Any]] = Depends(get_conn),
+    client: EvolutionClient = Depends(get_evolution_client),
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT status
+        FROM app.integration_status
+        WHERE provider = 'evolution'
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row and row["status"] == "CONNECTED":
+        return {"status": "already_connected", "detail": None}
+    try:
+        client.connect_instance()
+    except EvolutionClientError as exc:
+        return {"status": "failed", "detail": exc.detail}
+    return {"status": "requested", "detail": None}
+
+
+@api.get("/integrations/evolution/qr")
+def evolution_qr_code(response: Response) -> dict[str, Any]:
+    token = qr_buffer.current_token()
+    if not token:
+        raise HTTPException(status_code=404, detail="qr code not available")
+    base64_value = qr_buffer.get(token)
+    age = qr_buffer.age_seconds()
+    if not base64_value or age is None:
+        raise HTTPException(status_code=404, detail="qr code not available")
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "token": token,
+        "base64": base64_value,
+        "age_seconds": age,
+        "expires_in_seconds": max(0, qr_buffer.ttl_seconds - age),
     }
 
 
@@ -2103,6 +2921,10 @@ def evolution_webhook(
         return _process_connection_update(conn, payload)
     if event == "messages.upsert":
         return _process_message_upsert(conn, payload)
+    if event in {"qrcode.updated", "QRCODE_UPDATED"}:
+        return _process_qrcode_update(conn, payload)
+    if event == "messages.update":
+        return _process_messages_update(conn, payload)
 
     _insert_raw_event(conn, provider="evolution", payload=payload, processing_status="SKIPPED")
     return {"status": "skipped", "reason": "unsupported event"}
@@ -2171,14 +2993,14 @@ CONVERSATION_SORT_CLAUSES: dict[str, str] = {
 }
 
 
-def _clean_model_display_name(value: str | None) -> str:
+def _clean_escort_display_name(value: str | None) -> str:
     cleaned = (value or "").strip()
     if not cleaned:
         raise HTTPException(status_code=400, detail="display_name must not be empty")
     return cleaned
 
 
-def _clean_model_languages(values: list[str] | None) -> list[str]:
+def _clean_escort_languages(values: list[str] | None) -> list[str]:
     if not values:
         return []
     unique: list[str] = []
@@ -2190,6 +3012,13 @@ def _clean_model_languages(values: list[str] | None) -> list[str]:
 
 
 def _clean_calendar_external_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _clean_optional_text(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = value.strip()
@@ -2356,8 +3185,8 @@ def _media_usage_rank(
             {
                 "media_id": row["media_id"],
                 "media_type": row["media_type"],
-                "category": row["category"],
-                "approval_status": row["approval_status"],
+                "tags": list(row.get("tags") or []),
+                "is_active": bool(row["is_active"]),
                 "count": int(row["count"]),
                 "drilldown_href": f"/midias#media-{row['media_id']}",
             }
@@ -2471,42 +3300,43 @@ def _safe_percentage(numerator: int | None, denominator: int | None) -> int:
     return round((numerator / denominator) * 100)
 
 
-def _get_active_model_optional(conn: Connection[dict[str, Any]]) -> dict[str, Any] | None:
+def _get_active_escort_optional(conn: Connection[dict[str, Any]]) -> dict[str, Any] | None:
     return conn.execute(
         f"""
-        SELECT {MODEL_SELECT_COLUMNS}
-        FROM app.models
+        SELECT {ESCORT_SELECT_COLUMNS}
+        FROM app.escorts
         WHERE is_active = true
         LIMIT 1
         """
     ).fetchone()
 
 
-def _count_model_pendencies(model: dict[str, Any] | None) -> int:
-    if model is None:
+def _count_escort_pendencies(
+    conn: Connection[dict[str, Any]], escort: dict[str, Any] | None
+) -> int:
+    if escort is None:
         return 0
     pending = 0
-    pending += _count_pending_decision(model.get("persona_json"))
-    pending += _count_pending_decision(model.get("services_json"))
-    pending += _count_pending_decision(model.get("pricing_json"))
-    if not model.get("languages"):
+    if not escort.get("languages"):
         pending += 1
-    calendar_external_id = model.get("calendar_external_id")
+    calendar_external_id = escort.get("calendar_external_id")
     if not calendar_external_id or not str(calendar_external_id).strip():
         pending += 1
+    services = _count(
+        conn,
+        "SELECT count(*) FROM app.escort_services WHERE escort_id = %(id)s",
+        {"id": escort["id"]},
+    )
+    if services == 0:
+        pending += 1
+    locations = _count(
+        conn,
+        "SELECT count(*) FROM app.escort_locations WHERE escort_id = %(id)s",
+        {"id": escort["id"]},
+    )
+    if locations == 0:
+        pending += 1
     return pending
-
-
-def _count_pending_decision(node: Any) -> int:
-    if node is None:
-        return 0
-    if isinstance(node, str):
-        return 1 if node == "PENDING_DECISION" else 0
-    if isinstance(node, list):
-        return sum(_count_pending_decision(item) for item in node)
-    if isinstance(node, dict):
-        return sum(_count_pending_decision(value) for value in node.values())
-    return 0
 
 
 def _dashboard_queue_base_sql() -> str:
@@ -2823,7 +3653,7 @@ def _get_conversation_read(conn: Connection[dict[str, Any]], conversation_id: uu
           lm.delivery_status AS last_delivery_status
         FROM app.conversations c
         JOIN app.clients cl ON cl.id = c.client_id
-        JOIN app.models mo ON mo.id = c.model_id
+        JOIN app.escorts mo ON mo.id = c.model_id
         LEFT JOIN LATERAL (
           SELECT direction, message_type, left(content_text, 240) AS content_preview,
                  created_at, delivery_status
@@ -2859,7 +3689,7 @@ def _conversation_read(row: dict[str, Any]) -> dict[str, Any]:
             "profile_summary": row["profile_summary"],
             "language_hint": row["language_hint"],
         },
-        "model": {"id": row["model_id"], "display_name": row["model_display_name"]},
+        "escort": {"id": row["model_id"], "display_name": row["model_display_name"]},
         "state": row["state"],
         "flow_type": row["flow_type"],
         "handoff_status": row["handoff_status"],
@@ -2887,7 +3717,7 @@ def _receipt_read(row: dict[str, Any]) -> dict[str, Any]:
             "profile_summary": row["profile_summary"],
             "language_hint": row["language_hint"],
         },
-        "model": {"id": row["model_id"], "display_name": row["model_display_name"]},
+        "escort": {"id": row["model_id"], "display_name": row["model_display_name"]},
         "message_id": row["message_id"],
         "detected_amount": row["detected_amount"],
         "expected_amount": row["expected_amount"],
@@ -2924,22 +3754,100 @@ def _insert_handoff_event(
     )
 
 
-def _default_send_constraints(media_type: str) -> dict[str, Any]:
-    constraints: dict[str, Any] = {"send_only_when_requested": True}
-    if media_type == "video":
-        constraints["view_once"] = True
-    return constraints
+def _validate_media_tags(
+    conn: Connection[dict[str, Any]], tags: list[str]
+) -> list[str]:
+    normalized = sorted({t.strip() for t in tags if t and t.strip()})
+    if not normalized:
+        return []
+    rows = conn.execute(
+        "SELECT tag FROM app.media_tag_vocabulary WHERE tag = ANY(%(tags)s)",
+        {"tags": normalized},
+    ).fetchall()
+    known = {row["tag"] for row in rows}
+    unknown = [t for t in normalized if t not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown media tag(s): {', '.join(unknown)}",
+        )
+    return normalized
 
 
-def _active_model_id(conn: Connection[dict[str, Any]]) -> uuid.UUID | None:
-    row = conn.execute("SELECT id FROM app.models WHERE is_active = true LIMIT 1").fetchone()
+def _select_media(
+    conn: Connection[dict[str, Any]], media_id: uuid.UUID
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT ma.id, ma.model_id, ma.media_type, ma.is_active, ma.deactivated_at,
+               ma.metadata_json, ma.created_at, ma.updated_at,
+               COALESCE(
+                 (SELECT array_agg(t.tag ORDER BY t.tag) FROM app.media_tags t WHERE t.media_id = ma.id),
+                 ARRAY[]::text[]
+               ) AS tags
+        FROM app.media_assets ma
+        WHERE ma.id = %(id)s
+        """,
+        {"id": media_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="media not found")
+    return row
+
+
+def _active_escort_id(conn: Connection[dict[str, Any]]) -> uuid.UUID | None:
+    row = conn.execute("SELECT id FROM app.escorts WHERE is_active = true LIMIT 1").fetchone()
     return row["id"] if row else None
+
+
+_QR_REDACTED_KEYS = frozenset({"code"})
+
+
+def _existing_evolution_state(
+    conn: Connection[dict[str, Any]], instance: str
+) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        SELECT status, metadata_json
+        FROM app.integration_status
+        WHERE provider = 'evolution' AND instance = %(instance)s
+        """,
+        {"instance": instance},
+    ).fetchone()
 
 
 def _process_connection_update(conn: Connection[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
     parsed = EvolutionConnectionUpdate.model_validate(payload)
-    raw = _insert_raw_event(conn, provider="evolution", payload=payload, processing_status="PROCESSED")
+    raw = _insert_raw_event(
+        conn,
+        provider="evolution",
+        payload=payload,
+        processing_status="PROCESSED",
+        extra_redacted_keys=_QR_REDACTED_KEYS,
+    )
     status = _map_evolution_status(parsed.data.status or parsed.data.state)
+    previous = _existing_evolution_state(conn, parsed.instance)
+    previous_status = previous["status"] if previous else None
+    previous_metadata = (previous and previous.get("metadata_json")) or {}
+    previous_connected_since = previous_metadata.get("connected_since") if isinstance(previous_metadata, dict) else None
+
+    if status == "CONNECTED":
+        qr_buffer.clear()
+        qr_code_ref = None
+        if previous_status == "CONNECTED" and previous_connected_since:
+            connected_since = previous_connected_since
+        else:
+            connected_since = _now().isoformat()
+    else:
+        qr_code_ref = qr_buffer.current_token()
+        connected_since = None
+
+    metadata: dict[str, Any] = {"raw_event_id": str(raw["id"])}
+    if parsed.data.reason:
+        metadata["reason"] = parsed.data.reason
+    if connected_since:
+        metadata["connected_since"] = connected_since
+
     conn.execute(
         """
         INSERT INTO app.integration_status (
@@ -2958,11 +3866,146 @@ def _process_connection_update(conn: Connection[dict[str, Any]], payload: dict[s
         {
             "instance": parsed.instance,
             "status": status,
-            "qr_code_ref": parsed.data.qr,
-            "metadata_json": Jsonb({"raw_event_id": str(raw["id"]), "reason": parsed.data.reason}),
+            "qr_code_ref": qr_code_ref,
+            "metadata_json": Jsonb(metadata),
         },
     )
     return {"status": "processed", "event": parsed.event, "integration_status": status}
+
+
+def _extract_qr_base64(payload: dict[str, Any]) -> str | None:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        qrcode = data.get("qrcode")
+        if isinstance(qrcode, dict):
+            value = qrcode.get("base64")
+            if isinstance(value, str) and value.strip():
+                return value
+        if isinstance(qrcode, str) and qrcode.strip():
+            return qrcode
+        for key in ("base64", "qr"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return None
+
+
+_DELIVERY_STATUS_MAP = {
+    "SENT": "SENT",
+    "SEND": "SENT",
+    "FAILED": "FAILED",
+    "ERROR": "FAILED",
+}
+
+
+def _extract_messages_update_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = payload.get("data")
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        return [raw]
+    return []
+
+
+def _extract_update_external_id(item: dict[str, Any]) -> str | None:
+    key = item.get("key")
+    if isinstance(key, dict):
+        value = key.get("id")
+        if isinstance(value, str) and value:
+            return value
+    for field in ("keyId", "messageId", "id"):
+        value = item.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _extract_update_status(item: dict[str, Any]) -> str | None:
+    update = item.get("update")
+    if isinstance(update, dict):
+        value = update.get("status")
+        if isinstance(value, str) and value:
+            return value.upper()
+    value = item.get("status")
+    if isinstance(value, str) and value:
+        return value.upper()
+    return None
+
+
+def _process_messages_update(conn: Connection[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+    items = _extract_messages_update_items(payload)
+    applied = 0
+    for item in items:
+        external_message_id = _extract_update_external_id(item)
+        raw_status = _extract_update_status(item)
+        if not external_message_id or not raw_status:
+            continue
+        mapped = _DELIVERY_STATUS_MAP.get(raw_status)
+        if mapped is None:
+            continue
+        result = conn.execute(
+            """
+            UPDATE app.messages
+            SET delivery_status = %(status)s
+            WHERE external_message_id = %(external_message_id)s
+              AND direction = 'OUTBOUND'
+            RETURNING id
+            """,
+            {"status": mapped, "external_message_id": external_message_id},
+        ).fetchone()
+        if result:
+            applied += 1
+
+    processing_status = "PROCESSED" if applied > 0 else "SKIPPED"
+    _insert_raw_event(
+        conn,
+        provider="evolution",
+        payload=payload,
+        processing_status=processing_status,
+    )
+    return {
+        "status": "processed" if applied > 0 else "skipped",
+        "event": payload.get("event"),
+        "updates_applied": applied,
+    }
+
+
+def _process_qrcode_update(conn: Connection[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+    base64_value = _extract_qr_base64(payload)
+    raw = _insert_raw_event(
+        conn,
+        provider="evolution",
+        payload=payload,
+        processing_status="PROCESSED" if base64_value else "SKIPPED",
+        extra_redacted_keys=_QR_REDACTED_KEYS,
+    )
+    if not base64_value:
+        return {"status": "skipped", "event": payload.get("event"), "reason": "qr base64 missing"}
+
+    token = qr_buffer.store(base64_value)
+    instance = payload.get("instance") or settings.evolution_instance
+    conn.execute(
+        """
+        INSERT INTO app.integration_status (
+          provider, instance, status, qr_code_ref, last_event_at, metadata_json
+        ) VALUES (
+          'evolution', %(instance)s, 'QR_REQUIRED', %(qr_code_ref)s, now(), %(metadata_json)s
+        )
+        ON CONFLICT (provider, instance)
+        DO UPDATE SET
+          status = 'QR_REQUIRED',
+          qr_code_ref = EXCLUDED.qr_code_ref,
+          last_event_at = EXCLUDED.last_event_at,
+          metadata_json = EXCLUDED.metadata_json,
+          updated_at = now()
+        """,
+        {
+            "instance": instance,
+            "qr_code_ref": token,
+            "metadata_json": Jsonb({"raw_event_id": str(raw["id"])}),
+        },
+    )
+    return {"status": "processed", "event": payload.get("event"), "integration_status": "QR_REQUIRED"}
 
 
 def _process_message_upsert(conn: Connection[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
@@ -2977,7 +4020,7 @@ def _process_message_upsert(conn: Connection[dict[str, Any]], payload: dict[str,
         processing_status="RECEIVED",
     )
     normalized = normalize_evolution_message(parsed, trace_id=raw["trace_id"], raw_event_id=raw["id"])
-    model_id = _active_model_id(conn)
+    model_id = _active_escort_id(conn)
     if model_id is None:
         _mark_raw_failed(conn, raw["id"], "NO_ACTIVE_MODEL", "No active model is configured")
         raise HTTPException(status_code=409, detail="no active model")
@@ -3060,8 +4103,9 @@ def _insert_raw_event(
     external_message_id: str | None = None,
     remote_jid: str | None = None,
     processing_status: str,
+    extra_redacted_keys: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    sanitized = _sanitize_payload(payload)
+    sanitized = _sanitize_payload(payload, extra_redacted_keys)
     event_name = str(payload.get("event") or payload.get("event_name") or "unknown")
     instance = payload.get("instance")
     if external_message_id:
@@ -3144,18 +4188,24 @@ def _map_evolution_status(value: str | None) -> str:
     return "UNKNOWN"
 
 
-def _sanitize_payload(value: Any) -> Any:
+_BASE_REDACTED_KEYS = frozenset(
+    {"base64", "jpegthumbnail", "thumbnail", "thumbnaildirectpath", "qr", "qrcode"}
+)
+
+
+def _sanitize_payload(value: Any, extra_keys: frozenset[str] | None = None) -> Any:
+    redacted_keys = _BASE_REDACTED_KEYS if not extra_keys else _BASE_REDACTED_KEYS | extra_keys
     if isinstance(value, dict):
         sanitized = {}
         for key, item in value.items():
             lowered = str(key).lower()
-            if lowered in {"base64", "jpegthumbnail", "thumbnail", "thumbnaildirectpath"}:
+            if lowered in redacted_keys:
                 sanitized[key] = "[removed]"
             else:
-                sanitized[key] = _sanitize_payload(item)
+                sanitized[key] = _sanitize_payload(item, extra_keys)
         return sanitized
     if isinstance(value, list):
-        return [_sanitize_payload(item) for item in value]
+        return [_sanitize_payload(item, extra_keys) for item in value]
     return value
 
 

@@ -60,7 +60,7 @@ Materializar a base tecnica do MVP: monorepo, contratos versionados, migrations,
 **Entregaveis:**
 - Estrutura inicial do monorepo com `apps/api`, `apps/agent`, `apps/operator-web`, `packages/contracts`, `packages/observability`, `db/migrations`, `prompts`, `tests`, `scripts` e `infra`.
 - Migrations SQL puro versionado para schemas `app`, `langgraph` e `logs`.
-- Tabelas canonicas do MVP: `app.clients`, `app.models`, `app.conversations`, `app.messages`, `app.raw_webhook_events`, `app.handoff_events`, `app.integration_status`, `app.media_assets`, `app.receipts`, `app.schedule_slots` e `logs.agent_executions`.
+- Tabelas canonicas do MVP: `app.clients`, `app.escorts` e filhas (`escort_services`, `escort_locations`, `escort_preferences`, `escort_availability`), `app.conversations`, `app.messages`, `app.raw_webhook_events`, `app.handoff_events`, `app.integration_status`, `app.media_assets`, `app.receipts`, `app.schedule_slots` e `logs.agent_executions`.
 - Indices, constraints e checks documentados, incluindo modelo ativa unica, anti-overlap de agenda e consistencia entre `state` e `handoff_status`.
 - Schemas versionados em `packages/contracts` para Evolution, mensagem interna normalizada, read models, handoff, agenda, midia, receipts e tools do agente.
 - Seeds minimos de desenvolvimento para uma modelo ativa e dados operacionais iniciais.
@@ -70,7 +70,7 @@ Materializar a base tecnica do MVP: monorepo, contratos versionados, migrations,
 **Tarefas principais:**
 - Criar estrutura de diretorios do monorepo.
 - Definir enums/checks para `state`, `flow_type`, `handoff_status`, `client_status`, direcao, role, tipos de mensagem, status de agenda, status de sync e status de receipt.
-- Implementar `one_active_model` com indice unico parcial em `app.models`.
+- Implementar `one_active_escort` com indice unico parcial em `app.escorts`.
 - Implementar `schedule_slots_no_overlap` com `btree_gist` e `tstzrange`.
 - Implementar unicidade de mensagens por `external_message_id` quando existir.
 - Implementar invariantes entre `state`, `state_before_escalation` e `handoff_status`.
@@ -759,7 +759,7 @@ Expandir somente depois de estabilidade medida em producao assistida, priorizand
 
 - Quais sao os precos, duracoes, piso de negociacao, acrescimo de saida e condicoes comerciais da modelo ativa?
 - Quais servicos sao explicitamente nao oferecidos pela modelo?
-- Existe antecedencia minima, limite diario ou restricoes de horario que precisam entrar em `services_json`?
+- Existe antecedencia minima, limite diario ou restricoes de horario que precisam entrar em `app.escort_availability`?
 - Qual e o procedimento humano exato para avaliar seguranca territorial em saidas?
 - Qual politica operacional vale para atraso, reagendamento, cancelamento e no-show?
 - Como classificar `NEW`, `RETURNING`, `VIP` e `BLOCKED` na pratica inicial?

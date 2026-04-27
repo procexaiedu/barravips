@@ -10,12 +10,11 @@ import type {
   ConversationState,
   DashboardHealthRead,
   DashboardSummaryRead,
+  EscortRead,
   FlowType,
   HandoffSummaryRead,
   HandoffStatus,
-  MediaApprovalStatus,
   MediaRead,
-  ModelRead,
   PaginatedEnvelope,
   ReceiptRead,
   ScheduleSlotRead,
@@ -30,18 +29,16 @@ import {
 } from "@/features/shared/formatters";
 import {
   conversationStateLabel,
+  escortPendencyKindLabel,
   flowTypeLabel,
   handoffReasonLabel,
   handoffStatusLabel,
-  mediaApprovalLabel,
-  mediaTypeLabel,
-  modelPendencyKindLabel,
   queueLabel,
   queueReason,
   scheduleSlotLabel,
   urgencyProfileLabel,
 } from "@/features/shared/labels";
-import { detectModelPendencies } from "@/features/shared/pending";
+import { detectEscortPendencies } from "@/features/shared/pending";
 
 const POLL_INTERVAL_MS = 15_000;
 const DASHBOARD_WINDOW_DAYS = 14;
@@ -69,7 +66,7 @@ type DashboardState = {
   slots: Envelope<ScheduleSlotRead> | null;
   media: Envelope<MediaRead> | null;
   receipts: Envelope<ReceiptRead> | null;
-  model: ModelRead | null;
+  escort: EscortRead | null;
   agentOps: AgentOpsSummaryRead | null;
   errors: {
     conversations: BffFetchError | null;
@@ -82,7 +79,7 @@ type DashboardState = {
     slots: BffFetchError | null;
     media: BffFetchError | null;
     receipts: BffFetchError | null;
-    model: BffFetchError | null;
+    escort: BffFetchError | null;
     agentOps: BffFetchError | null;
   };
 };
@@ -99,7 +96,7 @@ const INITIAL_STATE: DashboardState = {
   slots: null,
   media: null,
   receipts: null,
-  model: null,
+  escort: null,
   agentOps: null,
   errors: {
     conversations: null,
@@ -112,7 +109,7 @@ const INITIAL_STATE: DashboardState = {
     slots: null,
     media: null,
     receipts: null,
-    model: null,
+    escort: null,
     agentOps: null,
   },
 };
@@ -133,8 +130,6 @@ const SCHEDULE_STATUS_LABELS: ScheduleSlotStatus[] = [
   "CONFIRMED",
   "CANCELLED",
 ];
-const MEDIA_STATUS_LABELS: MediaApprovalStatus[] = ["PENDING", "APPROVED", "REJECTED", "REVOKED"];
-
 export function DashboardClient() {
   const [state, setState] = useState<DashboardState>(INITIAL_STATE);
   const [firstLoad, setFirstLoad] = useState(true);
@@ -146,7 +141,7 @@ export function DashboardClient() {
     const from = now.toISOString();
     const to = new Date(now.getTime() + DASHBOARD_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-    const [health, summary, handoffSummary, queues, conversations, handoffsOpen, handoffsAck, slots, media, receipts, model, agentOps] = await Promise.all([
+    const [health, summary, handoffSummary, queues, conversations, handoffsOpen, handoffsAck, slots, media, receipts, escort, agentOps] = await Promise.all([
       bffFetch<DashboardHealthRead>("/api/operator/dashboard/health"),
       bffFetch<DashboardSummaryRead>("/api/operator/dashboard/summary?window=24h"),
       bffFetch<HandoffSummaryRead>("/api/operator/handoffs/summary?window=7d"),
@@ -171,7 +166,7 @@ export function DashboardClient() {
       bffFetch<Envelope<ReceiptRead>>(
         `/api/operator/receipts?needs_review=true&page_size=${ATTENTION_PAGE_SIZE}`,
       ),
-      bffFetch<ModelRead>("/api/operator/models/active"),
+      bffFetch<EscortRead>("/api/operator/escorts/active"),
       bffFetch<AgentOpsSummaryRead>("/api/operator/status/agent?window=24h"),
     ]);
 
@@ -187,7 +182,7 @@ export function DashboardClient() {
       slots: slots.data,
       media: media.data,
       receipts: receipts.data,
-      model: model.data,
+      escort: escort.data,
       agentOps: agentOps.data,
       errors: {
         health: health.error,
@@ -200,7 +195,7 @@ export function DashboardClient() {
         slots: slots.error,
         media: media.error,
         receipts: receipts.error,
-        model: model.error,
+        escort: escort.error,
         agentOps: agentOps.error,
       },
     });
@@ -379,9 +374,9 @@ export function DashboardClient() {
             error={state.errors.media}
             suppressError={Boolean(bffOutage)}
           />
-          <ModelPendenciesPanel
-            model={state.model}
-            error={state.errors.model}
+          <EscortPendenciesPanel
+            escort={state.escort}
+            error={state.errors.escort}
             suppressError={Boolean(bffOutage)}
           />
         </div>
@@ -1594,8 +1589,7 @@ function MediaSummaryPanel({
   suppressError?: boolean;
 }) {
   if (summary) {
-    const pending = summary.media_pending?.value ?? 0;
-    const withoutCategory = summary.media_without_category?.value ?? 0;
+    const active = summary.media_active?.value ?? 0;
     return (
       <section className="panel">
         <div className="panel-heading">
@@ -1608,14 +1602,8 @@ function MediaSummaryPanel({
           <table className="data-table" aria-label="Resumo de mídias">
             <tbody>
               <tr>
-                <td>Aguardando aprovação</td>
-                <td className={pending > 0 ? "numeric warning-cell" : "numeric"}>
-                  {formatNumber(pending)}
-                </td>
-              </tr>
-              <tr>
-                <td>Sem categoria definida</td>
-                <td className="numeric">{formatNumber(withoutCategory)}</td>
+                <td>Materiais ativos</td>
+                <td className="numeric">{formatNumber(active)}</td>
               </tr>
             </tbody>
           </table>
@@ -1627,8 +1615,7 @@ function MediaSummaryPanel({
     return <ErrorPanel title="Materiais" error={error} />;
   }
   const items = media?.items ?? [];
-  const counts = countBy(items, (item) => item.approval_status);
-  const withoutCategory = items.filter((item) => !item.category).length;
+  const active = items.filter((item) => item.is_active).length;
 
   return (
     <section className="panel">
@@ -1644,17 +1631,13 @@ function MediaSummaryPanel({
         <div className="stack-md">
           <table className="data-table" aria-label="Materiais por situação">
             <tbody>
-              {MEDIA_STATUS_LABELS.map((label) => (
-                <tr key={label}>
-                  <td>{mediaApprovalLabel(label)}</td>
-                  <td className={label === "PENDING" && (counts[label] ?? 0) > 0 ? "numeric warning-cell" : "numeric"}>
-                    {formatNumber(counts[label] ?? 0)}
-                  </td>
-                </tr>
-              ))}
               <tr>
-                <td>Sem categoria definida</td>
-                <td className="numeric">{formatNumber(withoutCategory)}</td>
+                <td>Ativos</td>
+                <td className="numeric">{formatNumber(active)}</td>
+              </tr>
+              <tr>
+                <td>Inativos</td>
+                <td className="numeric">{formatNumber(items.length - active)}</td>
               </tr>
               <tr>
                 <td>Total carregado</td>
@@ -1668,57 +1651,57 @@ function MediaSummaryPanel({
   );
 }
 
-function ModelPendenciesPanel({
-  model,
+function EscortPendenciesPanel({
+  escort,
   error,
   suppressError = false,
 }: {
-  model: ModelRead | null;
+  escort: EscortRead | null;
   error: BffFetchError | null;
   suppressError?: boolean;
 }) {
   if (error && error.status !== 404 && !suppressError) {
-    return <ErrorPanel title="Dados do agente" error={error} />;
+    return <ErrorPanel title="Dados da acompanhante" error={error} />;
   }
-  if (!model) {
+  if (!escort) {
     return (
       <section className="panel">
         <div className="panel-heading">
-          <h2>Dados do agente</h2>
+          <h2>Dados da acompanhante</h2>
           <span className="badge warning">Sem cadastro</span>
         </div>
         <p className="empty-state">
-          Nenhum agente cadastrado ainda. Sem isso o agente não responde e a agenda fica parada.
+          Nenhuma acompanhante cadastrada ainda. Sem isso o agente não responde e a agenda fica parada.
         </p>
         <div className="link-strip">
-          <Link className="link-pill" href="/agentes">
-            Cadastrar agente
+          <Link className="link-pill" href="/acompanhantes">
+            Cadastrar acompanhante
           </Link>
         </div>
       </section>
     );
   }
-  const pendencies = detectModelPendencies(model);
+  const pendencies = detectEscortPendencies(escort);
   return (
     <section className="panel">
       <div className="panel-heading">
-        <h2>Dados do agente</h2>
-        <Link className="link-pill" href="/agentes">
-          Ver agentes
+        <h2>Dados da acompanhante</h2>
+        <Link className="link-pill" href="/acompanhantes">
+          Ver acompanhantes
         </Link>
       </div>
       <dl className="kv-list">
         <div>
-          <dt>Agente</dt>
-          <dd>{model.display_name}</dd>
+          <dt>Acompanhante</dt>
+          <dd>{escort.display_name}</dd>
         </div>
         <div>
           <dt>Google Calendar</dt>
-          <dd>{model.calendar_external_id || "—"}</dd>
+          <dd>{escort.calendar_external_id || "—"}</dd>
         </div>
         <div>
           <dt>Idiomas</dt>
-          <dd>{model.languages?.length ? model.languages.join(", ") : "—"}</dd>
+          <dd>{escort.languages?.length ? escort.languages.join(", ") : "—"}</dd>
         </div>
       </dl>
       <h3 style={{ marginTop: 14 }}>Pendências</h3>
@@ -1728,7 +1711,7 @@ function ModelPendenciesPanel({
         <ul className="stack-sm" aria-label="Pendências">
           {pendencies.map((pendency) => (
             <li key={`${pendency.kind}:${pendency.path}`}>
-              <span className="chip warning">{modelPendencyKindLabel(pendency.kind)}</span>
+              <span className="chip warning">{escortPendencyKindLabel(pendency.kind)}</span>
               <span className="muted-cell">{pendency.label}</span>
             </li>
           ))}
@@ -1777,7 +1760,7 @@ function deriveDashboard(state: DashboardState) {
   const slotItems = state.slots?.items ?? [];
   const mediaItems = state.media?.items ?? [];
   const openHandoffs = state.handoffsOpen?.items ?? [];
-  const modelPendencies = state.model ? detectModelPendencies(state.model) : [];
+  const escortPendencies = state.escort ? detectEscortPendencies(state.escort) : [];
   const leadItems = buildLeadPendingItems(state);
   const paymentItems = buildPaymentPendingItems(state);
   const agendaItems = buildAgendaPendingItems(state);
@@ -1788,15 +1771,15 @@ function deriveDashboard(state: DashboardState) {
     activeSampleCount: conversationItems.filter(isActiveInLast24h).length,
     stateCounts: countBy(conversationItems, (conversation) => conversation.state),
     flowCounts: countBy(conversationItems, (conversation) => conversation.flow_type),
-    mediaCounts: countBy(mediaItems, (item) => item.approval_status),
-    modelPendencies,
+    mediaCounts: countBy(mediaItems, (item) => (item.is_active ? "ACTIVE" : "INACTIVE")),
+    escortPendencies,
     stalledConversationCount: conversationItems.filter(isStalledConversation).length,
     priorityQueueItems: (state.queues?.items ?? []).map((item) =>
       decorateQueueItem(item, conversationMap.get(item.conversation_id)),
     ),
     resolveCounts: {
       leads: leadItems.length,
-      config: state.model ? modelPendencies.length : 1,
+      config: state.escort ? escortPendencies.length : 1,
       payments: paymentItems.length,
       agenda: agendaItems.length,
       media: mediaPendingItems.length,
@@ -1838,18 +1821,18 @@ function buildResolveTabs(state: DashboardState): ResolveTab[] {
   const paymentItems = buildPaymentPendingItems(state);
   const agendaItems = buildAgendaPendingItems(state);
   const mediaItems = buildMediaPendingItems(state);
-  const configError = state.errors.model && state.errors.model.status !== 404 ? state.errors.model : null;
+  const configError = state.errors.escort && state.errors.escort.status !== 404 ? state.errors.escort : null;
 
   return [
     {
       id: "config",
       label: "Configuração",
-      href: "/agentes",
-      emptyTitle: state.model ? "Agente configurado." : "Nenhum agente cadastrado ainda.",
-      emptyDescription: state.model
-        ? "Todos os campos principais do agente estão preenchidos."
-        : "Sem um agente configurado, o sistema não responde nem agenda horários.",
-      emptyActionLabel: state.model ? "Revisar configurações" : "Cadastrar agente",
+      href: "/acompanhantes",
+      emptyTitle: state.escort ? "Acompanhante configurada." : "Nenhuma acompanhante cadastrada ainda.",
+      emptyDescription: state.escort
+        ? "Todos os campos principais da acompanhante estão preenchidos."
+        : "Sem uma acompanhante configurada, o sistema não responde nem agenda horários.",
+      emptyActionLabel: state.escort ? "Revisar configurações" : "Cadastrar acompanhante",
       count: configItems.length,
       items: configItems.slice(0, ATTENTION_LIMIT),
       error: configError,
@@ -1991,28 +1974,28 @@ function buildLeadPendingItems(state: DashboardState): PendingItemData[] {
 }
 
 function buildConfigPendingItems(state: DashboardState): PendingItemData[] {
-  if (!state.model) {
+  if (!state.escort) {
     return [
       {
-        id: "missing-model",
-        title: "Nenhum agente cadastrado",
-        summary: "Sem um agente configurado, ele não responde nem agenda horários.",
-        href: "/agentes",
-        actionLabel: "Cadastrar agente",
+        id: "missing-escort",
+        title: "Nenhuma acompanhante cadastrada",
+        summary: "Sem uma acompanhante configurada, o agente não responde nem agenda horários.",
+        href: "/acompanhantes",
+        actionLabel: "Cadastrar acompanhante",
         tone: "danger",
         meta: [{ label: "bloqueante", tone: "danger" }],
       },
     ];
   }
 
-  return detectModelPendencies(state.model).map((pendency) => ({
+  return detectEscortPendencies(state.escort).map((pendency) => ({
     id: `${pendency.kind}:${pendency.path}`,
     title: pendency.label,
-    summary: "Preencha este campo para o agente operar com menos atrito.",
-    href: "/agentes",
-    actionLabel: "Configurar agente",
+    summary: "Preencha este campo para a operação rodar sem atrito.",
+    href: "/acompanhantes",
+    actionLabel: "Configurar acompanhante",
     tone: "warning",
-    meta: [{ label: modelPendencyKindLabel(pendency.kind), tone: "warning" }],
+    meta: [{ label: escortPendencyKindLabel(pendency.kind), tone: "warning" }],
   }));
 }
 
@@ -2055,42 +2038,8 @@ function buildAgendaPendingItems(state: DashboardState): PendingItemData[] {
   return Array.from(items.values());
 }
 
-function buildMediaPendingItems(state: DashboardState): PendingItemData[] {
-  const items = new Map<string, PendingItemData>();
-
-  for (const media of state.media?.items ?? []) {
-    const meta: PendingMeta[] = [{ label: mediaTypeLabel(media.media_type) }];
-    let summary: string | null = null;
-    let tone: PendingTone = "default";
-
-    if (media.approval_status === "PENDING") {
-      meta.push({ label: "aguardando aprovação", tone: "warning" });
-      summary = "Material aguardando sua aprovação antes de entrar no repertório do agente.";
-      tone = "warning";
-    }
-
-    if (!media.category) {
-      meta.push({ label: "sem categoria", tone: "warning" });
-      summary = summary ?? "Material sem categoria definida. O agente perde contexto ao usar esse item.";
-      tone = "warning";
-    }
-
-    if (!summary) {
-      continue;
-    }
-
-    items.set(media.id, {
-      id: media.id,
-      title: `${mediaTypeLabel(media.media_type)}${media.category ? ` · ${media.category}` : ""}`,
-      summary,
-      href: "/midias",
-      actionLabel: "Revisar materiais",
-      tone,
-      meta,
-    });
-  }
-
-  return Array.from(items.values());
+function buildMediaPendingItems(_state: DashboardState): PendingItemData[] {
+  return [];
 }
 
 function buildPaymentPendingItems(state: DashboardState): PendingItemData[] {

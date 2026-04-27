@@ -50,7 +50,7 @@ export async function bffFetch<T>(input: string, init?: RequestInit): Promise<Bf
 export async function bffSend<T>(
   input: string,
   body: unknown,
-  method: "POST" | "PATCH" = "POST",
+  method: "POST" | "PATCH" | "DELETE" = "POST",
 ): Promise<BffFetchResult<T>> {
   return bffFetch<T>(input, {
     method,

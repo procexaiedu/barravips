@@ -1,35 +1,18 @@
-INSERT INTO app.models (
+INSERT INTO app.escorts (
   id,
   display_name,
   is_active,
-  persona_json,
-  services_json,
-  pricing_json,
   languages
 ) VALUES (
   '10000000-0000-0000-0000-000000000001',
   'Modelo em cadastro',
   true,
-  '{"fixture_only": true, "persona": "PENDING_DECISION"}'::jsonb,
-  '{
-    "fixture_only": true,
-    "offered": "PENDING_DECISION",
-    "not_offered": "PENDING_DECISION",
-    "constraints": {
-      "min_duration_minutes": "PENDING_DECISION",
-      "advance_booking_minutes": "PENDING_DECISION",
-      "max_bookings_per_day": "PENDING_DECISION"
-    }
-  }'::jsonb,
-  '{
-    "fixture_only": true,
-    "currency": "BRL",
-    "durations": "PENDING_DECISION",
-    "negotiation_floor_pct": "PENDING_DECISION",
-    "external_surcharge": "PENDING_DECISION"
-  }'::jsonb,
   ARRAY[]::text[]
 ) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO app.escort_availability (escort_id)
+VALUES ('10000000-0000-0000-0000-000000000001')
+ON CONFLICT (escort_id) DO NOTHING;
 
 INSERT INTO app.clients (
   id,

@@ -75,7 +75,7 @@ def seed_conversation_id() -> uuid.UUID:
 
 
 @pytest.fixture()
-def seed_model_id() -> uuid.UUID:
+def seed_escort_id() -> uuid.UUID:
     return SEED_MODEL_ID
 
 

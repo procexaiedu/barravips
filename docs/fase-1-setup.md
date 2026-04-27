@@ -206,7 +206,7 @@ docker compose -f infra/docker-compose.dev.yml exec postgres psql -U barra_vips 
 Conferir contagens principais:
 
 ```powershell
-docker compose -f infra/docker-compose.dev.yml exec postgres psql -U barra_vips -d barra_vips -c "select count(*) as models from app.models; select count(*) as clients from app.clients; select count(*) as conversations from app.conversations; select count(*) as messages from app.messages;"
+docker compose -f infra/docker-compose.dev.yml exec postgres psql -U barra_vips -d barra_vips -c "select count(*) as escorts from app.escorts; select count(*) as clients from app.clients; select count(*) as conversations from app.conversations; select count(*) as messages from app.messages;"
 ```
 
 ## Secrets pendentes
@@ -264,31 +264,31 @@ Ainda nao definido:
 - Thresholds para `VIP`: quantidade minima de fechamentos, ticket minimo, frequencia, janela temporal e se havera override manual.
 - Contrato exato para registrar o desfecho do handoff/atendimento.
 
-## Decisoes por modelo
+## Decisoes por acompanhante
 
-Persona, regras comerciais e agenda nao devem ser hardcoded na aplicacao. Mesmo com uma unica modelo ativa no MVP, esses dados sao tratados como configuracao por modelo para preservar o caminho futuro de multiplas modelos.
+Catalogo (servicos, locais, preferencias, agenda) nao deve ser hardcoded na aplicacao. Cada acompanhante carrega o proprio catalogo. Persona, vocabulario e regras de qualificacao ficam no system prompt definido pela engenharia, fora do banco e fora da UI do operador.
 
-Campos ja modelados para isso:
+Campos ja modelados para isso (migrations 005 e 006):
 
-- `app.models.persona_json`: tom, limites, idiomas e informacoes operacionais da modelo.
-- `app.models.services_json`: servicos oferecidos, nao oferecidos e restricoes operacionais.
-- `app.models.pricing_json`: duracoes, precos, piso de negociacao e acrescimos.
-- `app.models.languages`: idiomas atendidos.
-- `app.models.calendar_external_id`: calendario vinculado a modelo.
-- `app.schedule_slots.model_id`: agenda e bloqueios por modelo.
-- `app.media_assets.model_id`: midias vinculadas a modelo.
-- `app.conversations.model_id`: conversa sempre ligada a uma modelo.
+- `app.escorts`: identidade (nome, idiomas, calendar, status, foto principal).
+- `app.escort_services`: servicos com duracao e preco em centavos.
+- `app.escort_locations`: cidades, bairros, taxa de deslocamento.
+- `app.escort_preferences`: chave/valor discretos para restricoes objetivas.
+- `app.escort_availability`: duracao minima, antecedencia minima, maximo por dia (1:1 com `app.escorts`).
+- `app.schedule_slots.model_id`: agenda e bloqueios por acompanhante (coluna mantem nome legado mas referencia `app.escorts`).
+- `app.media_assets.model_id`: midias vinculadas a acompanhante (coluna mantem nome legado mas referencia `app.escorts`).
+- `app.conversations.model_id`: conversa sempre ligada a uma acompanhante (coluna mantem nome legado mas referencia `app.escorts`).
 
-No MVP existe a invariante `one_active_model`, que garante uma unica modelo ativa para reduzir risco operacional. Isso nao impede a expansao futura; apenas evita que a primeira versao precise resolver roteamento entre modelos, multiplos numeros, disponibilidade cruzada e conflitos de handoff.
+No MVP existe a invariante `one_active_escort`, que garante uma unica acompanhante ativa para reduzir risco operacional. Isso nao impede a expansao futura; apenas evita que a primeira versao precise resolver roteamento entre acompanhantes, multiplos numeros, disponibilidade cruzada e conflitos de handoff.
 
-Enquanto Fernando ainda nao fornecer esses dados, o seed permanece fixture-only com `PENDING_DECISION`. A API e o banco devem continuar funcionando sem inventar valores comerciais.
+Enquanto Fernando ainda nao fornecer dados reais, o seed permanece fixture-only. A API e o banco devem continuar funcionando sem inventar valores comerciais.
 
 ## Pendencias humanas
 
 Essas decisoes continuam pendentes, mas persona, regras comerciais e agenda nao bloqueiam a fundacao tecnica nem a API operacional inicial:
 
-- Nome real de exibicao da modelo ativa.
-- Persona operacional da modelo: tom, limites, idiomas e informacoes que ela pode afirmar.
+- Nome real de exibicao da acompanhante ativa.
+- Persona da acompanhante (definida no system prompt pela engenharia, com base nos materiais fornecidos por Fernando).
 - Precos, duracoes, piso de negociacao e acrescimo de saida.
 - Servicos oferecidos, servicos nao oferecidos e limites operacionais reais.
 - Antecedencia minima, limite diario, atraso, reagendamento, cancelamento e no-show.

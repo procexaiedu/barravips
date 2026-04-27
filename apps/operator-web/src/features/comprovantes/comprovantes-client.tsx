@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { PaginatedEnvelope, ReceiptAnalysisStatus, ReceiptRead } from "@/contracts";
+import type { PaginatedEnvelope, ReceiptRead } from "@/contracts";
 import { bffFetch, type BffFetchError } from "@/features/shared/bff-client";
 import {
   formatCurrency,
@@ -16,65 +16,22 @@ import { receiptAnalysisStatusLabel } from "@/features/shared/labels";
 const POLL_INTERVAL_MS = 30_000;
 const PAGE_SIZE = 100;
 
-const STATUS_OPTIONS: ReceiptAnalysisStatus[] = [
-  "PENDING",
-  "VALID",
-  "INVALID",
-  "UNCERTAIN",
-  "NEEDS_REVIEW",
-];
-
-type WindowFilter = "7d" | "30d" | "all";
-
-type AmountField = "detected" | "expected";
-
-type Filters = {
-  needsReview: "" | "true" | "false";
-  status: "" | ReceiptAnalysisStatus;
-  window: WindowFilter;
-  minAmount: string;
-  maxAmount: string;
-  amountField: AmountField;
-};
-
-const INITIAL_FILTERS: Filters = {
-  needsReview: "true",
-  status: "",
-  window: "30d",
-  minAmount: "",
-  maxAmount: "",
-  amountField: "detected",
-};
-
-function parseAmountInput(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed.replace(",", "."));
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return parsed;
-}
+type QueueMode = "pending" | "all";
 
 export function ComprovantesClient() {
-  const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
-  const [committed, setCommitted] = useState<Filters>(INITIAL_FILTERS);
+  const [mode, setMode] = useState<QueueMode>("pending");
   const [envelope, setEnvelope] = useState<PaginatedEnvelope<ReceiptRead> | null>(null);
   const [error, setError] = useState<BffFetchError | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptRead | null>(null);
 
-  const load = useCallback(async (active: Filters) => {
+  const load = useCallback(async (active: QueueMode) => {
     setLoading(true);
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("page_size", String(PAGE_SIZE));
-    if (active.needsReview) params.set("needs_review", active.needsReview);
-    if (active.status) params.set("status", active.status);
-    const min = parseAmountInput(active.minAmount);
-    if (min !== null) params.set("min_amount", String(min));
-    const max = parseAmountInput(active.maxAmount);
-    if (max !== null) params.set("max_amount", String(max));
-    if (min !== null || max !== null) {
-      params.set("amount_field", active.amountField);
+    if (active === "pending") {
+      params.set("needs_review", "true");
     }
     const result = await bffFetch<PaginatedEnvelope<ReceiptRead>>(
       `/api/operator/receipts?${params.toString()}`,
@@ -85,214 +42,77 @@ export function ComprovantesClient() {
   }, []);
 
   useEffect(() => {
-    void load(committed);
+    void load(mode);
     const id = window.setInterval(() => {
-      void load(committed);
+      void load(mode);
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
-  }, [committed, load]);
+  }, [mode, load]);
 
-  const visibleItems = useMemo(() => {
-    const items = envelope?.items ?? [];
-    return items.filter((receipt) => isInsideWindow(receipt.created_at, committed.window));
-  }, [committed.window, envelope]);
+  const items = useMemo(() => {
+    const list = envelope?.items ?? [];
+    return [...list].sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime();
+      const bTime = new Date(b.created_at).getTime();
+      return aTime - bTime;
+    });
+  }, [envelope]);
 
-  const stats = useMemo(() => summarizeReceipts(visibleItems), [visibleItems]);
-
-  const amountRangeError = useMemo(() => {
-    const min = parseAmountInput(filters.minAmount);
-    const max = parseAmountInput(filters.maxAmount);
-    if (min !== null && max !== null && min > max) {
-      return "O valor mínimo não pode ser maior que o máximo.";
-    }
-    return null;
-  }, [filters.minAmount, filters.maxAmount]);
-
-  const onSubmit = useCallback(
-    (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      if (amountRangeError) {
-        return;
-      }
-      setCommitted(filters);
-    },
-    [amountRangeError, filters],
+  const pendingCount = useMemo(
+    () => items.filter((receipt) => receipt.needs_review).length,
+    [items],
   );
 
-  const onReset = useCallback(() => {
-    setFilters(INITIAL_FILTERS);
-    setCommitted(INITIAL_FILTERS);
-  }, []);
-
   const hasLoaded = envelope !== null || error !== null;
-  const filtersActive = !sameFilters(committed, INITIAL_FILTERS);
-  const canReset = filtersActive || !sameFilters(filters, INITIAL_FILTERS);
 
   return (
     <div className="section-stack">
-      <section className={stats.needsReview > 0 ? "operations-hero warning" : "operations-hero ok"}>
-        <div className="operations-hero-copy">
-          <span className="badge muted">Fila de revisão</span>
-          <h2>
-            {stats.needsReview > 0
-              ? "Comprovantes aguardando validação humana"
-              : "Nenhum comprovante crítico aguardando revisão"}
-          </h2>
-          <p>
-            Pagamentos, contratos, propostas assinadas e documentos enviados pelos leads aparecem
-            aqui para reduzir risco antes de avançar a operação.
-          </p>
-        </div>
-        <div className="operations-hero-actions">
-          <a className="button" href="#fila-comprovantes">
-            Revisar fila
-          </a>
-          <Link className="button secondary" href="/conversas">
-            Abrir conversas
-          </Link>
-        </div>
-      </section>
-
-      <section className="metric-grid compact" aria-label="Resumo dos comprovantes">
-        <MetricCard label="Na fila" value={stats.total} detail="no filtro atual" />
-        <MetricCard label="Revisão humana" value={stats.needsReview} detail="precisam de decisão" warning={stats.needsReview > 0} />
-        <MetricCard label="Baixa confiança" value={stats.lowConfidence} detail="IA abaixo de 80%" warning={stats.lowConfidence > 0} />
-        <MetricCard label="Divergentes" value={stats.invalid} detail="valor ou leitura incoerente" danger={stats.invalid > 0} />
-      </section>
-
-      <section className="panel" id="fila-comprovantes">
-        <div className="panel-heading">
-          <div>
-            <h2>Fila de revisão</h2>
-            <p className="section-subtitle">
-              Revise evidências recebidas dos leads antes de confirmar pagamento, contrato ou proposta.
-            </p>
+      <section className="panel receipt-queue-panel" id="fila-comprovantes">
+        <div className="receipt-queue-toolbar">
+          <div className="receipt-queue-counter">
+            <strong>{formatNumber(mode === "pending" ? pendingCount : items.length)}</strong>
+            <span>{mode === "pending" ? "aguardando revisão" : "no período"}</span>
+          </div>
+          <div className="receipt-queue-tabs" role="tablist" aria-label="Filtro da fila">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "pending"}
+              className={mode === "pending" ? "queue-tab active" : "queue-tab"}
+              onClick={() => setMode("pending")}
+            >
+              Aguardando
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "all"}
+              className={mode === "all" ? "queue-tab active" : "queue-tab"}
+              onClick={() => setMode("all")}
+            >
+              Todos
+            </button>
           </div>
           <span className={loading ? "badge warning" : "badge muted"}>
-            {loading ? "Atualizando" : `${formatNumber(visibleItems.length)} visíveis`}
+            {loading ? "Atualizando" : "Atualizado"}
           </span>
         </div>
-
-        <form className="filter-bar" onSubmit={onSubmit} aria-label="Filtros de comprovantes">
-          <label>
-            <span>Revisão humana</span>
-            <select
-              value={filters.needsReview}
-              onChange={(event) =>
-                setFilters({ ...filters, needsReview: event.target.value as Filters["needsReview"] })
-              }
-            >
-              <option value="">Todos</option>
-              <option value="true">Precisa revisar</option>
-              <option value="false">Sem revisão pendente</option>
-            </select>
-          </label>
-          <label>
-            <span>Status da análise</span>
-            <select
-              value={filters.status}
-              onChange={(event) =>
-                setFilters({ ...filters, status: event.target.value as Filters["status"] })
-              }
-            >
-              <option value="">Todos</option>
-              {STATUS_OPTIONS.map((status) => (
-                <option key={status} value={status}>
-                  {receiptAnalysisStatusLabel(status)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Janela</span>
-            <select
-              value={filters.window}
-              onChange={(event) =>
-                setFilters({ ...filters, window: event.target.value as Filters["window"] })
-              }
-            >
-              <option value="7d">Últimos 7 dias</option>
-              <option value="30d">Últimos 30 dias</option>
-              <option value="all">Tudo</option>
-            </select>
-          </label>
-          <label>
-            <span>Valor mínimo (R$)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={filters.minAmount}
-              onChange={(event) => setFilters({ ...filters, minAmount: event.target.value })}
-              placeholder="0,00"
-            />
-          </label>
-          <label>
-            <span>Valor máximo (R$)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={filters.maxAmount}
-              onChange={(event) => setFilters({ ...filters, maxAmount: event.target.value })}
-              placeholder="0,00"
-            />
-          </label>
-          <fieldset className="form-field" aria-label="Comparar por">
-            <span>Comparar por</span>
-            <div className="inline-actions">
-              <label style={{ display: "inline-flex", gap: "0.25rem", alignItems: "center" }}>
-                <input
-                  type="radio"
-                  name="amount_field"
-                  value="detected"
-                  checked={filters.amountField === "detected"}
-                  onChange={() => setFilters({ ...filters, amountField: "detected" })}
-                />
-                <span>Detectado</span>
-              </label>
-              <label style={{ display: "inline-flex", gap: "0.25rem", alignItems: "center" }}>
-                <input
-                  type="radio"
-                  name="amount_field"
-                  value="expected"
-                  checked={filters.amountField === "expected"}
-                  onChange={() => setFilters({ ...filters, amountField: "expected" })}
-                />
-                <span>Esperado</span>
-              </label>
-            </div>
-          </fieldset>
-          <div className="form-field">
-            <span>&nbsp;</span>
-            <div className="inline-actions">
-              <button className="button" type="submit" disabled={Boolean(amountRangeError)}>
-                Aplicar filtros
-              </button>
-              <button className="button secondary" type="button" onClick={onReset} disabled={!canReset}>
-                Limpar
-              </button>
-            </div>
-          </div>
-          {amountRangeError ? (
-            <div className="panel-notice warning" role="alert">
-              {amountRangeError}
-            </div>
-          ) : null}
-        </form>
 
         {error ? <div className="panel-notice">{error.message}</div> : null}
 
         {!hasLoaded ? (
           <p className="empty-state">Carregando comprovantes...</p>
-        ) : visibleItems.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="empty-state-card">
-            <span className="empty-state-icon" aria-hidden="true" />
             <div className="empty-state-copy">
-              <strong>Nenhum comprovante aguardando revisão</strong>
+              <strong>
+                {mode === "pending"
+                  ? "Nenhum comprovante aguardando revisão"
+                  : "Nenhum comprovante no período"}
+              </strong>
               <p>
-                Quando leads enviarem comprovantes, contratos, propostas assinadas ou documentos
-                importantes, eles aparecerão aqui para validação.
+                Quando um lead enviar comprovante, ele entra aqui para você conferir se o valor bate
+                com o combinado pela IA.
               </p>
             </div>
             <Link className="button secondary empty-state-action" href="/conversas">
@@ -300,15 +120,15 @@ export function ComprovantesClient() {
             </Link>
           </div>
         ) : (
-          <div className="receipt-review-list">
-            {visibleItems.map((receipt) => (
-              <ReceiptReviewItem
+          <ul className="receipt-queue-list">
+            {items.map((receipt) => (
+              <ReceiptQueueRow
                 key={receipt.id}
                 receipt={receipt}
                 onReview={() => setSelectedReceipt(receipt)}
               />
             ))}
-          </div>
+          </ul>
         )}
       </section>
 
@@ -319,73 +139,83 @@ export function ComprovantesClient() {
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  warning = false,
-  danger = false,
-}: {
-  label: string;
-  value: number;
-  detail: string;
-  warning?: boolean;
-  danger?: boolean;
-}) {
+function ReceiptQueueRow({ receipt, onReview }: { receipt: ReceiptRead; onReview: () => void }) {
+  const clientName = receipt.client.display_name || receipt.client.whatsapp_jid;
+  const expected = parseAmount(receipt.expected_amount);
+  const detected = parseAmount(receipt.detected_amount);
+  const diff = detected !== null && expected !== null ? detected - expected : null;
+  const tolerance = Math.abs(parseAmount(receipt.tolerance_applied) ?? 0);
+  const diffTone: "ok" | "warning" | "danger" =
+    diff === null
+      ? "warning"
+      : Math.abs(diff) === 0
+        ? "ok"
+        : Math.abs(diff) <= tolerance
+          ? "warning"
+          : "danger";
+  const confidence = confidenceValue(receipt);
+  const confidenceTone: "high" | "mid" | "low" =
+    confidence === null ? "low" : confidence >= 0.8 ? "high" : confidence >= 0.6 ? "mid" : "low";
+
   return (
-    <div className={danger ? "metric compact danger" : warning ? "metric compact warning" : "metric compact"}>
-      <span className="metric-label">{label}</span>
-      <span className="metric-value">{formatNumber(value)}</span>
-      <span className="metric-sub">{detail}</span>
-    </div>
+    <li className={`receipt-queue-row tone-${diffTone}`}>
+      <div className="queue-col client">
+        <strong>{clientName}</strong>
+        <span>{formatWhatsAppJid(receipt.client.whatsapp_jid)}</span>
+      </div>
+
+      <div className="queue-col amounts">
+        <div className="amount-block">
+          <span className="amount-label">Combinado</span>
+          <span className="amount-value">{formatCurrency(receipt.expected_amount)}</span>
+        </div>
+        <div className="amount-arrow" aria-hidden="true">
+          →
+        </div>
+        <div className="amount-block">
+          <span className="amount-label">Recebido</span>
+          <span className="amount-value">{formatCurrency(receipt.detected_amount)}</span>
+          <DiffTag diff={diff} tone={diffTone} />
+        </div>
+      </div>
+
+      <div className="queue-col confidence">
+        <span className={`confidence-dot dot-${confidenceTone}`} aria-hidden="true" />
+        <div>
+          <span className="confidence-value">{formatConfidence(confidence)}</span>
+          <span className="confidence-sub">confiança IA</span>
+        </div>
+      </div>
+
+      <div className="queue-col wait">
+        <span className="wait-value" title={formatDateTime(receipt.created_at)}>
+          {formatRelativeSeconds(receipt.created_at)}
+        </span>
+        <span className="wait-sub">na fila</span>
+      </div>
+
+      <div className="queue-col actions">
+        <button className="button" type="button" onClick={onReview}>
+          Revisar
+        </button>
+        <Link className="link-pill" href={receipt.drilldown_href}>
+          Conversa
+        </Link>
+      </div>
+    </li>
   );
 }
 
-function ReceiptReviewItem({ receipt, onReview }: { receipt: ReceiptRead; onReview: () => void }) {
-  const clientName = receipt.client.display_name || receipt.client.whatsapp_jid;
-  const confidence = confidenceValue(receipt);
-  const amountTone = amountComparisonTone(
-    receipt.detected_amount,
-    receipt.expected_amount,
-    receipt.tolerance_applied,
-  );
-
-  return (
-    <article className={receipt.needs_review ? "receipt-review-item warning" : "receipt-review-item"}>
-      <DocumentPreview receipt={receipt} />
-      <div className="receipt-review-main">
-        <div className="receipt-review-header">
-          <div>
-            <h3>{clientName}</h3>
-            <p>{receipt.client.whatsapp_jid}</p>
-          </div>
-          <AnalysisBadge status={receipt.analysis_status} />
-        </div>
-        <div className="receipt-review-facts">
-          <span>
-            <strong>Valor detectado</strong>
-            <em className={amountTone ? `${amountTone}-cell` : ""}>{formatCurrency(receipt.detected_amount)}</em>
-          </span>
-          <span>
-            <strong>Confianca da IA</strong>
-            <em>{formatConfidence(confidence)}</em>
-          </span>
-          <span>
-            <strong>Recebido</strong>
-            <em title={formatDateTime(receipt.created_at)}>{formatRelativeSeconds(receipt.created_at)}</em>
-          </span>
-        </div>
-        <div className="receipt-review-actions">
-          <Link className="link-pill" href={receipt.drilldown_href}>
-            Conversa relacionada
-          </Link>
-          <button className="button" type="button" onClick={onReview}>
-            Revisar
-          </button>
-        </div>
-      </div>
-    </article>
-  );
+function DiffTag({ diff, tone }: { diff: number | null; tone: "ok" | "warning" | "danger" }) {
+  if (diff === null) {
+    return <span className="diff-tag diff-warning">Sem valor combinado</span>;
+  }
+  if (diff === 0) {
+    return <span className="diff-tag diff-ok">Bate</span>;
+  }
+  const sign = diff > 0 ? "+" : "−";
+  const label = `${sign}${formatCurrency(Math.abs(diff))}`;
+  return <span className={`diff-tag diff-${tone}`}>{label}</span>;
 }
 
 function ReceiptReviewModal({ receipt, onClose }: { receipt: ReceiptRead; onClose: () => void }) {
@@ -478,28 +308,6 @@ function DocumentPreview({ receipt, large = false }: { receipt: ReceiptRead; lar
   );
 }
 
-function AnalysisBadge({ status }: { status: ReceiptAnalysisStatus }) {
-  if (status === "INVALID") {
-    return <span className="badge danger">{receiptAnalysisStatusLabel(status)}</span>;
-  }
-  if (status === "UNCERTAIN" || status === "NEEDS_REVIEW" || status === "PENDING") {
-    return <span className="badge warning">{receiptAnalysisStatusLabel(status)}</span>;
-  }
-  return <span className="badge ok">{receiptAnalysisStatusLabel(status)}</span>;
-}
-
-function summarizeReceipts(items: ReceiptRead[]) {
-  return {
-    total: items.length,
-    needsReview: items.filter((receipt) => receipt.needs_review).length,
-    lowConfidence: items.filter((receipt) => {
-      const confidence = confidenceValue(receipt);
-      return confidence !== null && confidence < 0.8;
-    }).length,
-    invalid: items.filter((receipt) => receipt.analysis_status === "INVALID").length,
-  };
-}
-
 function extractedDataEntries(receipt: ReceiptRead): { label: string; value: string }[] {
   return [
     { label: "Valor detectado", value: formatCurrency(receipt.detected_amount) },
@@ -529,30 +337,8 @@ function confidenceValue(receipt: ReceiptRead): number | null {
 }
 
 function formatConfidence(value: number | null): string {
-  if (value === null) return "Não informada";
+  if (value === null) return "—";
   return `${Math.round(value * 100)}%`;
-}
-
-function isInsideWindow(iso: string, windowFilter: WindowFilter): boolean {
-  if (windowFilter === "all") return true;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return true;
-  const days = windowFilter === "7d" ? 7 : 30;
-  return Date.now() - date.getTime() <= days * 24 * 60 * 60 * 1000;
-}
-
-function amountComparisonTone(
-  detected: string | number | null,
-  expected: string | number | null,
-  tolerance: string | number | null,
-): "warning" | "danger" | null {
-  const detectedNumber = parseAmount(detected);
-  const expectedNumber = parseAmount(expected);
-  if (detectedNumber === null || expectedNumber === null) return null;
-  const diff = Math.abs(detectedNumber - expectedNumber);
-  if (diff === 0) return null;
-  const toleranceNumber = Math.abs(parseAmount(tolerance) ?? 0);
-  return diff > toleranceNumber ? "danger" : "warning";
 }
 
 function parseAmount(value: string | number | null): number | null {
@@ -561,13 +347,14 @@ function parseAmount(value: string | number | null): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function sameFilters(a: Filters, b: Filters): boolean {
-  return (
-    a.needsReview === b.needsReview &&
-    a.status === b.status &&
-    a.window === b.window &&
-    a.minAmount === b.minAmount &&
-    a.maxAmount === b.maxAmount &&
-    a.amountField === b.amountField
-  );
+function formatWhatsAppJid(jid: string): string {
+  const digits = jid.split("@")[0]?.replace(/\D/g, "") ?? jid;
+  if (digits.length >= 12) {
+    const country = digits.slice(0, 2);
+    const area = digits.slice(2, 4);
+    const rest = digits.slice(4);
+    const split = rest.length > 8 ? `${rest.slice(0, rest.length - 4)}-${rest.slice(-4)}` : rest;
+    return `+${country} ${area} ${split}`;
+  }
+  return jid;
 }

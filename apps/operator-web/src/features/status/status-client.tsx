@@ -7,13 +7,16 @@ import type {
   AgentExecutionStatus,
   AgentOpsSummaryRead,
   CalendarStatusRead,
+  EvolutionConnectResultRead,
+  EvolutionQrCodeRead,
   EvolutionStatusRead,
   HealthStatusRead,
 } from "@/contracts";
-import { bffFetch, type BffFetchError } from "@/features/shared/bff-client";
+import { bffFetch, bffSend, type BffFetchError } from "@/features/shared/bff-client";
 import { formatDateTime, formatNumber } from "@/features/shared/formatters";
 
 const POLL_INTERVAL_MS = 30_000;
+const QR_POLL_INTERVAL_MS = 5_000;
 
 type StatusState = {
   loadedAt: string | null;
@@ -73,6 +76,58 @@ export function StatusClient() {
     return () => window.clearInterval(id);
   }, [load]);
 
+  const evolutionStatus = state.evolution?.status;
+  const evolutionConnected = state.evolution?.connected ?? false;
+  const evolutionAlerting = !state.errors.evolution
+    && state.evolution
+    && (evolutionStatus === "QR_REQUIRED" || evolutionStatus === "DISCONNECTED");
+  const showQrPanel = evolutionStatus === "QR_REQUIRED";
+
+  const [qr, setQr] = useState<EvolutionQrCodeRead | null>(null);
+  const [qrError, setQrError] = useState<BffFetchError | null>(null);
+  const [connectStatus, setConnectStatus] = useState<EvolutionConnectResultRead | null>(null);
+  const [connectError, setConnectError] = useState<BffFetchError | null>(null);
+  const [connectInFlight, setConnectInFlight] = useState(false);
+
+  const loadQr = useCallback(async () => {
+    const result = await bffFetch<EvolutionQrCodeRead>("/api/operator/integrations/evolution/qr");
+    setQr(result.data);
+    setQrError(result.error && result.error.status !== 404 ? result.error : null);
+  }, []);
+
+  useEffect(() => {
+    if (!showQrPanel) {
+      setQr(null);
+      setQrError(null);
+      return;
+    }
+    void loadQr();
+    const id = window.setInterval(() => {
+      void loadQr();
+      void load();
+    }, QR_POLL_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [showQrPanel, loadQr, load]);
+
+  useEffect(() => {
+    if (evolutionConnected) {
+      setConnectStatus(null);
+      setConnectError(null);
+    }
+  }, [evolutionConnected]);
+
+  const requestConnect = useCallback(async () => {
+    setConnectInFlight(true);
+    const result = await bffSend<EvolutionConnectResultRead>(
+      "/api/operator/integrations/evolution/connect",
+      undefined,
+    );
+    setConnectStatus(result.data);
+    setConnectError(result.error);
+    setConnectInFlight(false);
+    void load();
+  }, [load]);
+
   if (firstLoad) {
     return (
       <div className="panel" role="status">
@@ -114,20 +169,84 @@ export function StatusClient() {
           <h2>Conexão com o WhatsApp</h2>
           {renderHeadingBadge(state.evolution?.status, state.errors.evolution)}
         </div>
+        {evolutionAlerting ? (
+          <p className="panel-notice danger" role="alert">
+            {evolutionStatus === "QR_REQUIRED"
+              ? "WhatsApp aguardando leitura do QR code para reconectar."
+              : "WhatsApp desconectado. Gere um novo QR code e escaneie com o aparelho."}
+          </p>
+        ) : null}
         {state.errors.evolution ? (
           <p>{state.errors.evolution.message}</p>
         ) : state.evolution ? (
-          <dl className="kv-list">
-            <Row label="Número/instância" value={state.evolution.instance} />
-            <Row
-              label="Situação"
-              value={evolutionStatusLabel(state.evolution.status)}
-              badge={evolutionBadge(state.evolution.status)}
-            />
-            <Row label="QR code pendente" value={state.evolution.qr_code_ref ?? "—"} />
-            <Row label="Último evento" value={formatDateTime(state.evolution.last_event_at)} />
-            <Row label="Última atualização" value={formatDateTime(state.evolution.updated_at)} />
-          </dl>
+          <>
+            <dl className="kv-list">
+              <Row label="Número/instância" value={state.evolution.instance} />
+              <Row
+                label="Situação"
+                value={evolutionStatusLabel(state.evolution.status)}
+                badge={evolutionBadge(state.evolution.status)}
+              />
+              <Row
+                label="QR code pendente"
+                value={
+                  state.evolution.qr_code_ref
+                    ? `token ${state.evolution.qr_code_ref.slice(0, 8)}…${
+                        state.evolution.qr_age_seconds !== null
+                          ? ` (gerado há ${state.evolution.qr_age_seconds}s)`
+                          : ""
+                      }`
+                    : "—"
+                }
+              />
+              <Row label="Último evento" value={formatDateTime(state.evolution.last_event_at)} />
+              <Row label="Conectado desde" value={formatDateTime(state.evolution.connected_since)} />
+              <Row label="Última atualização" value={formatDateTime(state.evolution.updated_at)} />
+            </dl>
+            {showQrPanel ? (
+              <div className="section-stack" style={{ marginTop: 16 }}>
+                <p className="empty-state">
+                  Abra o WhatsApp → <strong>Aparelhos conectados</strong> → <strong>Conectar aparelho</strong> e escaneie o QR abaixo.
+                </p>
+                {qr ? (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={qrSrc(qr.base64)}
+                      alt="QR code do WhatsApp"
+                      width={256}
+                      height={256}
+                      style={{ border: "1px solid var(--border, #ccc)", padding: 8, background: "#fff" }}
+                    />
+                    <span className="empty-state">
+                      QR gerado há {qr.age_seconds}s · expira em {qr.expires_in_seconds}s
+                    </span>
+                  </div>
+                ) : qrError ? (
+                  <p className="panel-notice warning">{qrError.message}</p>
+                ) : (
+                  <p className="empty-state">Aguardando QR do servidor…</p>
+                )}
+              </div>
+            ) : null}
+            <div className="action-row" style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  void requestConnect();
+                }}
+                disabled={connectInFlight || evolutionConnected}
+              >
+                {connectInFlight ? "Solicitando…" : evolutionConnected ? "Já conectado" : "Gerar novo QR"}
+              </button>
+              {connectError ? (
+                <span className="panel-notice warning">{connectError.message}</span>
+              ) : connectStatus ? (
+                <span className="empty-state">{connectResultLabel(connectStatus)}</span>
+              ) : null}
+            </div>
+          </>
         ) : (
           <p className="empty-state">Sem informação do WhatsApp agora.</p>
         )}
@@ -445,4 +564,23 @@ function calendarBadge(status: string) {
     return <span className="badge warning">{label}</span>;
   }
   return <span className="badge danger">{label}</span>;
+}
+
+function qrSrc(base64: string): string {
+  return base64.startsWith("data:") ? base64 : `data:image/png;base64,${base64}`;
+}
+
+function connectResultLabel(result: EvolutionConnectResultRead): string {
+  switch (result.status) {
+    case "requested":
+      return "Conexão solicitada. Aguarde o QR aparecer aqui.";
+    case "already_connected":
+      return "Instância já está conectada.";
+    case "failed":
+      return result.detail
+        ? `Não foi possível solicitar conexão: ${result.detail}`
+        : "Não foi possível solicitar conexão.";
+    default:
+      return "";
+  }
 }

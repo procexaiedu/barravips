@@ -26,6 +26,11 @@ class Settings:
         "dev-chatwoot-webhook-secret",
     )
     evolution_instance: str = os.getenv("EVOLUTION_INSTANCE", "barra-vips-main")
+    evolution_api_base_url: str = os.getenv("EVOLUTION_API_BASE_URL", "")
+    evolution_api_key: str = os.getenv("EVOLUTION_API_KEY", "")
+    evolution_outbound_timeout_seconds: float = float(
+        os.getenv("EVOLUTION_OUTBOUND_TIMEOUT_SECONDS", "15")
+    )
     calendar_instance: str = os.getenv("CALENDAR_INSTANCE", "default")
     media_storage_dir: Path = Path(os.getenv("MEDIA_STORAGE_DIR", "storage/media"))
     max_media_upload_bytes: int = int(os.getenv("MAX_MEDIA_UPLOAD_BYTES", "0"))

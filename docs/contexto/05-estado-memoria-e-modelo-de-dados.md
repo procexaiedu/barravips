@@ -205,74 +205,47 @@ As migrations iniciais devem materializar pelo menos estas tabelas. Os nomes aba
 - `created_at`
 - `updated_at`
 
-### `app.models`
+### `app.escorts` e tabelas filhas
+
+A operacao mantem o catalogo das acompanhantes em tabelas normalizadas. A engenharia controla o system prompt do agente; o operador edita apenas catalogo (nada de tom, vocabulario ou regras de qualificacao).
+
+`app.escorts`:
 
 - `id`
 - `display_name`
 - `is_active`, `NOT NULL DEFAULT false`
-- `persona_json`
-- `services_json`
-- `pricing_json`
-- `languages`
+- `languages` (text[])
 - `calendar_external_id`
+- `photo_main_path`
 - `created_at`
 - `updated_at`
 
 Invariantes:
 
-- so pode existir uma linha com `is_active = true` no MVP, garantida por indice unico parcial:
+- so pode existir uma linha com `is_active = true`, garantida por indice unico parcial:
 
 ```sql
-CREATE UNIQUE INDEX one_active_model
-  ON app.models (is_active)
+CREATE UNIQUE INDEX one_active_escort
+  ON app.escorts (is_active)
   WHERE is_active = true;
 ```
 
-- o default `false` permite cadastro como rascunho; a ativacao deve acontecer por service dedicado que desative a modelo anterior na mesma transacao ou rejeite a operacao.
+- o default `false` permite cadastro como rascunho; a ativacao deve acontecer por service dedicado que desative a acompanhante anterior na mesma transacao ou rejeite a operacao.
 
-### Estrutura de `pricing_json`
+Tabelas filhas (todas com FK `escort_id REFERENCES app.escorts(id) ON DELETE CASCADE`):
 
-```json
-{
-  "currency": "BRL",
-  "durations": [
-    { "minutes": 60,  "price": "???" },
-    { "minutes": 90,  "price": "???" },
-    { "minutes": 120, "price": "???" }
-  ],
-  "negotiation_floor_pct": 15,
-  "external_surcharge": "???"
-}
-```
+- `app.escort_services`: `id, name, description, duration_minutes, price_cents, restrictions, sort_order`. Cada linha e um servico ofertado pela acompanhante.
+- `app.escort_locations`: `id, city, neighborhood, accepts_displacement, displacement_fee_cents, sort_order`. Cidades atendidas e taxa de deslocamento.
+- `app.escort_preferences`: `id, key, value` (UNIQUE em `escort_id, key`). Restricoes objetivas em chave/valor.
+- `app.escort_availability`: 1:1 com `app.escorts` (`escort_id PRIMARY KEY`). Campos `min_duration_minutes`, `advance_booking_minutes`, `max_bookings_per_day`.
 
-Campos a preencher por Fernando: valor de cada duracao e acrescimo fixo para saida.
-
-### Estrutura de `services_json`
-
-```json
-{
-  "offered": [
-    { "id": "acompanhamento_local", "label": "Acompanhamento no local", "flow_type": "INTERNAL" },
-    { "id": "acompanhamento_saida", "label": "Saida", "flow_type": "EXTERNAL" }
-  ],
-  "not_offered": [
-    "???"
-  ],
-  "constraints": {
-    "min_duration_minutes": 60,
-    "advance_booking_minutes": "???",
-    "max_bookings_per_day": null
-  }
-}
-```
-
-Campos a preencher por Fernando: lista de servicos nao oferecidos, antecedencia minima para agendamento e limite diario de atendimentos quando aplicavel.
+A camada de tool do agente le esse catalogo via API; o prompt nao recebe JSONB livre.
 
 ### `app.conversations`
 
 - `id`
 - `client_id`
-- `model_id`
+- `model_id` (FK para `app.escorts`)
 - `state`
 - `state_before_escalation`, nullable; preserva o estado anterior a `ESCALADO` para restaurar no `RELEASED`
 - `flow_type`
@@ -291,7 +264,7 @@ Campos a preencher por Fernando: lista de servicos nao oferecidos, antecedencia 
 
 Indices recomendados: `(model_id, last_message_at DESC)`, `(handoff_status, last_message_at DESC)` e `UNIQUE (client_id, model_id)`.
 
-No MVP, a conversa ativa deve ser resolvida por `client_id + model_id`. Como existe uma unica modelo ativa, isso equivale a uma conversa ativa por cliente, mas a modelagem preserva `model_id` para evitar retrabalho quando multiplas modelos entrarem no produto. O `id` dessa linha e o `conversation_id` usado por LangGraph, debounce, fila logica, locks, logs e testes.
+No MVP, a conversa ativa deve ser resolvida por `client_id + model_id`. Como existe uma unica acompanhante ativa, isso equivale a uma conversa ativa por cliente, mas a modelagem preserva `model_id` para evitar retrabalho quando multiplas acompanhantes entrarem no produto. O `id` dessa linha e o `conversation_id` usado por LangGraph, debounce, fila logica, locks, logs e testes.
 
 Invariantes de consistencia entre `state` e `handoff_status`:
 

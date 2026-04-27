@@ -28,7 +28,7 @@ def isolated_amount_filter_db(app) -> Iterator[tuple[TestClient, Any]]:
           app.raw_webhook_events,
           app.integration_status,
           app.clients,
-          app.models
+          app.escorts
         CASCADE
         """
     )
@@ -50,7 +50,7 @@ def _seed_conversations_with_amounts(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-00000000c001"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Amount Filter', true)
         """,
         {"model_id": model_id},
@@ -97,7 +97,7 @@ def _seed_receipts_with_amounts(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-00000000d001"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Receipt Filter', true)
         """,
         {"model_id": model_id},

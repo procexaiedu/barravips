@@ -22,6 +22,7 @@ DashboardWindowKey = Literal[
     "next_14_days",
     "all_time",
 ]
+FinancialWindowKey = Literal["7d", "30d", "90d"]
 DashboardSampleMethod = Literal["full_aggregate"]
 MediaUsageWindowKey = Literal["requested", "all_time"]
 MediaUsageSampleMethod = Literal["full_aggregate"]
@@ -51,22 +52,58 @@ class ClientBrief(ContractModel):
     language_hint: str | None = None
 
 
-class ModelBrief(ContractModel):
+class EscortBrief(ContractModel):
     id: UUID
     display_name: str
 
 
-class ModelRead(ContractModel):
+class EscortRead(ContractModel):
     id: UUID
     display_name: str
     is_active: bool
-    persona_json: dict
-    services_json: dict
-    pricing_json: dict
     languages: list[str]
     calendar_external_id: str | None = None
+    photo_main_path: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class EscortServiceRead(ContractModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    duration_minutes: int = Field(gt=0)
+    price_cents: int = Field(ge=0)
+    restrictions: str | None = None
+    sort_order: int = 0
+
+
+class EscortLocationRead(ContractModel):
+    id: UUID
+    city: str
+    neighborhood: str | None = None
+    accepts_displacement: bool = False
+    displacement_fee_cents: int | None = Field(default=None, ge=0)
+    sort_order: int = 0
+
+
+class EscortPreferenceRead(ContractModel):
+    key: str
+    value: str
+
+
+class EscortAvailabilityRead(ContractModel):
+    min_duration_minutes: int | None = Field(default=None, gt=0)
+    advance_booking_minutes: int | None = Field(default=None, ge=0)
+    max_bookings_per_day: int | None = Field(default=None, gt=0)
+
+
+class EscortDetailRead(ContractModel):
+    escort: EscortRead
+    services: list[EscortServiceRead] = Field(default_factory=list)
+    locations: list[EscortLocationRead] = Field(default_factory=list)
+    preferences: list[EscortPreferenceRead] = Field(default_factory=list)
+    availability: EscortAvailabilityRead
 
 
 class LastMessageRead(ContractModel):
@@ -80,7 +117,7 @@ class LastMessageRead(ContractModel):
 class ConversationRead(ContractModel):
     id: UUID
     client: ClientBrief
-    model: ModelBrief
+    escort: EscortBrief
     state: ConversationState
     flow_type: FlowType
     handoff_status: HandoffStatus
@@ -155,15 +192,31 @@ class ScheduleSlotRead(ContractModel):
     calendar_sync_status: Literal["PENDING", "SYNCED", "ERROR"]
     last_synced_at: datetime | None = None
     last_sync_error: str | None = None
+    metadata_json: dict | None = None
 
 
 class EvolutionStatusRead(ContractModel):
     provider: Literal["evolution"] = "evolution"
     instance: str
     status: Literal["CONNECTED", "DISCONNECTED", "QR_REQUIRED", "UNKNOWN"]
+    connected: bool = False
     qr_code_ref: str | None = None
+    qr_age_seconds: int | None = None
     last_event_at: datetime | None = None
+    connected_since: datetime | None = None
     updated_at: datetime
+
+
+class EvolutionQrCodeRead(ContractModel):
+    token: str
+    base64: str
+    age_seconds: int
+    expires_in_seconds: int
+
+
+class EvolutionConnectResultRead(ContractModel):
+    status: Literal["requested", "already_connected", "failed"]
+    detail: str | None = None
 
 
 class CalendarStatusRead(ContractModel):
@@ -261,12 +314,18 @@ class MediaRead(ContractModel):
     id: UUID
     model_id: UUID
     media_type: Literal["image", "audio", "video", "document"]
-    category: str | None = None
-    approval_status: Literal["PENDING", "APPROVED", "REJECTED", "REVOKED"]
-    send_constraints_json: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    is_active: bool
+    deactivated_at: datetime | None = None
     metadata_json: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class MediaTagRead(ContractModel):
+    tag: str
+    display_label: str
+    sort_order: int
 
 
 class MediaUsageWindowRead(ContractModel):
@@ -296,8 +355,8 @@ class MediaUsageBreakdownMetric(ContractModel):
 class MediaUsageRankItemRead(ContractModel):
     media_id: UUID
     media_type: Literal["image", "audio", "video", "document"]
-    category: str | None = None
-    approval_status: Literal["PENDING", "APPROVED", "REJECTED", "REVOKED"]
+    tags: list[str] = Field(default_factory=list)
+    is_active: bool
     count: int = Field(ge=0)
     drilldown_href: str
 
@@ -312,9 +371,7 @@ class MediaUsageSummaryRead(ContractModel):
     requested_window: Literal["7d"]
     delivery_status_available: bool
     windows: dict[MediaUsageWindowKey, MediaUsageWindowRead]
-    pending: MediaUsageCountMetric
-    without_category: MediaUsageCountMetric
-    approved_by_category: MediaUsageBreakdownMetric
+    active: MediaUsageCountMetric
     most_used: MediaUsageRankRead
     send_failures: MediaUsageRankRead
 
@@ -323,7 +380,7 @@ class ReceiptRead(ContractModel):
     id: UUID
     conversation_id: UUID
     client: ClientBrief
-    model: ModelBrief
+    escort: EscortBrief
     message_id: UUID
     detected_amount: Decimal | None = None
     expected_amount: Decimal | None = None
@@ -476,6 +533,68 @@ class DashboardFinancialRead(ContractModel):
     projected_revenue: DashboardFinancialForecastMetric
 
 
+class FinancialReceiptStatusBreakdown(ContractModel):
+    counts: dict[str, int]
+    amounts: dict[str, Decimal]
+    meta: DashboardMetricMeta
+
+
+class FinancialMatchRateMetric(ContractModel):
+    value_percent: int | None = None
+    numerator: int = Field(default=0, ge=0)
+    denominator: int = Field(default=0, ge=0)
+    meta: DashboardMetricMeta
+
+
+class FinancialPaymentLagMetric(ContractModel):
+    average_days: float | None = None
+    sample_size: int = Field(default=0, ge=0)
+    meta: DashboardMetricMeta
+
+
+class FinancialLargestDivergence(ContractModel):
+    receipt_id: UUID
+    conversation_id: UUID
+    client_display_name: str | None = None
+    expected_amount: Decimal
+    detected_amount: Decimal
+    diff_abs: Decimal
+    age_days: int = Field(ge=0)
+    drilldown_href: str
+
+
+class FinancialDivergenceAging(ContractModel):
+    threshold_days: int = Field(default=5, ge=1)
+    count: int = Field(default=0, ge=0)
+    total_amount: Decimal = Field(default=Decimal("0"))
+
+
+class FinancialRevenueFunnel(ContractModel):
+    in_negotiation_amount: Decimal = Field(default=Decimal("0"))
+    closed_amount: Decimal = Field(default=Decimal("0"))
+    receipt_received_amount: Decimal = Field(default=Decimal("0"))
+    receipt_match_amount: Decimal = Field(default=Decimal("0"))
+    meta: DashboardMetricMeta
+
+
+class FinancialSnapshotRead(ContractModel):
+    generated_at: datetime
+    requested_window: FinancialWindowKey
+    window_starts_at: datetime
+    window_ends_at: datetime
+    open_pipeline_total: DashboardAmountMetric
+    open_pipeline_by_state: DashboardAmountBreakdownMetric
+    detected_total: DashboardAmountMetric
+    divergence_abs: DashboardAmountMetric
+    projected_revenue: DashboardFinancialForecastMetric
+    receipts_by_status: FinancialReceiptStatusBreakdown
+    receipt_match_rate: FinancialMatchRateMetric
+    payment_lag: FinancialPaymentLagMetric
+    largest_divergence: FinancialLargestDivergence | None = None
+    divergence_aging: FinancialDivergenceAging
+    revenue_funnel: FinancialRevenueFunnel
+
+
 class DashboardSummaryRead(ContractModel):
     generated_at: datetime
     requested_window: Literal["24h"]
@@ -488,8 +607,7 @@ class DashboardSummaryRead(ContractModel):
     conversations_by_handoff_status: DashboardBreakdownMetric
     handoffs_opened: DashboardCountMetric
     handoffs_acknowledged: DashboardCountMetric
-    media_pending: DashboardCountMetric
-    media_without_category: DashboardCountMetric
+    media_active: DashboardCountMetric
     schedule_slots_next_14d_total: DashboardCountMetric
     schedule_slots_next_14d_by_status: DashboardBreakdownMetric
     calendar_sync_pending: DashboardCountMetric

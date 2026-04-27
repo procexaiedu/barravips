@@ -2,7 +2,6 @@ import type {
   ConversationState,
   FlowType,
   HandoffStatus,
-  MediaApprovalStatus,
   MediaType,
   ReceiptAnalysisStatus,
   ScheduleSlotStatus,
@@ -72,21 +71,6 @@ export function scheduleSlotLabel(status: ScheduleSlotStatus | string): string {
   }
 }
 
-export function mediaApprovalLabel(status: MediaApprovalStatus | string): string {
-  switch (status) {
-    case "PENDING":
-      return "Aguardando aprovação";
-    case "APPROVED":
-      return "Aprovado para uso";
-    case "REJECTED":
-      return "Reprovado";
-    case "REVOKED":
-      return "Arquivado";
-    default:
-      return status;
-  }
-}
-
 export function mediaTypeLabel(type: MediaType | string): string {
   switch (type) {
     case "image":
@@ -119,25 +103,6 @@ export function receiptAnalysisStatusLabel(status: ReceiptAnalysisStatus | strin
   }
 }
 
-export function mediaSendConstraintLabel(key: string): string {
-  switch (key) {
-    case "send_only_when_requested":
-      return "Enviar apenas quando solicitado";
-    case "view_once":
-      return "Visualizacao unica";
-    case "max_per_day":
-      return "Maximo por dia";
-    case "min_interval_minutes":
-      return "Intervalo minimo";
-    case "allowed_hours":
-      return "Horarios permitidos";
-    case "requires_approval":
-      return "Exige aprovacao";
-    default:
-      return key;
-  }
-}
-
 export function calendarSyncLabel(status: string): string {
   switch (status) {
     case "SYNCED":
@@ -151,10 +116,10 @@ export function calendarSyncLabel(status: string): string {
   }
 }
 
-export function modelPendencyKindLabel(kind: string): string {
+export function escortPendencyKindLabel(kind: string): string {
   switch (kind) {
-    case "PENDING_DECISION":
-      return "Falta decidir";
+    case "MISSING_DISPLAY_NAME":
+      return "Nome";
     case "EMPTY_LANGUAGES":
       return "Idiomas";
     case "MISSING_CALENDAR_ID":

@@ -42,7 +42,7 @@ Use estas etiquetas ao decidir se um dado entra na UI:
 | --- | --- | --- | --- |
 | Conversas WhatsApp | `app.clients`, `app.conversations`, `app.messages`, `app.raw_webhook_events` | Fluxo ativo | Webhook da Evolution em `POST /webhooks/evolution` |
 | Status da Evolution | `app.integration_status` | Fluxo ativo | Evento `connection.update` da Evolution |
-| Modelos | `app.models` | Fluxo ativo | API operacional `/api/models` |
+| Acompanhantes | `app.escorts` + filhas (`escort_services`, `escort_locations`, `escort_preferences`, `escort_availability`) | Fluxo ativo | API operacional `/api/escorts` |
 | Midias curadas | `app.media_assets` | Fluxo ativo | Upload operacional `/api/media` |
 | Agenda local | `app.schedule_slots` | Fluxo ativo | Bloqueio manual `/api/schedule/slots/block` |
 | Handoffs | `app.handoff_events` + update em `app.conversations` | Fluxo ativo | Acknowledge/release na API operacional; abertura prevista no fluxo do agente |
@@ -66,24 +66,35 @@ Use estas etiquetas ao decidir se um dado entra na UI:
 | `created_at` | Quando o cliente foi criado no sistema | `app.clients` | Ordenacao secundaria, auditoria, suporte | `So suporte/operacao` |
 | `updated_at` | Ultima atualizacao do cadastro | `app.clients` | Auditoria, suporte | `So suporte/operacao` |
 
-### 2. Modelos (`app.models`)
+### 2. Acompanhantes (`app.escorts` + filhas)
+
+A engenharia controla persona, vocabulario e regras de qualificacao no system prompt. O operador edita apenas catalogo (servicos, locais, preferencias, agenda).
+
+`app.escorts`:
 
 | Campo | O que representa | Origem | Como usar na interface | Cuidado |
 | --- | --- | --- | --- | --- |
-| `id` | Identificador interno da modelo | `app.models.id` | Seletores, chaves, relacoes com agenda e midia | `So suporte/operacao` |
-| `display_name` | Nome de exibicao da modelo | `app.models` | Cabecalhos, selects, tabelas, detalhe | `Pronto para UI` |
-| `is_active` | Indica qual modelo esta ativa na operacao | `app.models` | Badge "ativa/inativa", alertas, filtros | `Pronto para UI`; ha invariante de uma unica ativa |
-| `persona_json` | Configuracao da persona da IA para a modelo | `app.models` | Tela de configuracao, revisao de pendencias | `UI com contexto`; nunca despejar JSON bruto em telas operacionais gerais |
-| `services_json` | Servicos oferecidos, nao oferecidos e limites | `app.models` | Tela administrativa, resumo de servicos, pendencias | `UI com contexto`; ha placeholders `PENDING_DECISION` nos fixtures |
-| `pricing_json` | Precos, moeda, piso de negociacao e acrescimos | `app.models` | Tela administrativa, resumo comercial, validacoes | `UI com contexto`; dado sensivel, mostrar formatado e com labels claros |
-| `languages` | Idiomas atendidos | `app.models` | Chips, filtros, detalhe da modelo | `Pronto para UI` |
-| `calendar_external_id` | Identificador do Google Calendar vinculado | `app.models` | Status/configuracao da agenda | `UI com contexto`; campo operacional, nao e dado de negocio para destaque |
-| `created_at` | Criacao do cadastro | `app.models` | Auditoria, suporte | `So suporte/operacao` |
-| `updated_at` | Ultima atualizacao do cadastro | `app.models` | Auditoria, tabela administrativa | `Pronto para UI` em telas admin |
+| `id` | Identificador interno da acompanhante | `app.escorts.id` | Seletores, chaves, relacoes com agenda e midia | `So suporte/operacao` |
+| `display_name` | Nome de exibicao | `app.escorts` | Cabecalhos, selects, tabelas, detalhe | `Pronto para UI` |
+| `is_active` | Indica qual acompanhante esta ativa na operacao | `app.escorts` | Badge "ativa/inativa", alertas, filtros | `Pronto para UI`; ha invariante de uma unica ativa |
+| `languages` | Idiomas atendidos | `app.escorts` | Chips, filtros, detalhe | `Pronto para UI` |
+| `calendar_external_id` | Identificador do Google Calendar vinculado | `app.escorts` | Status/configuracao da agenda | `UI com contexto`; campo operacional |
+| `photo_main_path` | Caminho/URL da foto principal | `app.escorts` | Cabecalho da tela, miniaturas | `UI com contexto`; opcional |
+| `created_at` / `updated_at` | Auditoria | `app.escorts` | Auditoria, tabela administrativa | `So suporte/operacao` |
 
-Observacao:
+Tabelas filhas (todas com FK `escort_id`):
 
-- Os seeds atuais usam `PENDING_DECISION` em partes de `persona_json`, `services_json` e `pricing_json`. Em UI, isso deve virar "falta definir", nao string crua.
+- `app.escort_services`: `name`, `description`, `duration_minutes`, `price_cents`, `restrictions`, `sort_order`. Catalogo de servicos vendidos.
+- `app.escort_locations`: `city`, `neighborhood`, `accepts_displacement`, `displacement_fee_cents`, `sort_order`. Cidades atendidas e taxa de deslocamento.
+- `app.escort_preferences`: `key`, `value` (UNIQUE em `escort_id, key`). Restricoes objetivas em chave/valor.
+- `app.escort_availability`: 1:1 com `app.escorts`. `min_duration_minutes`, `advance_booking_minutes`, `max_bookings_per_day`.
+
+Endpoints:
+
+- `GET /api/escorts`, `POST /api/escorts`, `GET /api/escorts/active`.
+- `GET /api/escorts/{id}` retorna `EscortDetailRead` com listas tipadas das filhas.
+- `PATCH /api/escorts/{id}` atualiza campos da escort.
+- `PUT /api/escorts/{id}/{services|locations|preferences|availability}` substitui o conjunto.
 
 ### 3. Conversas (`app.conversations`)
 
@@ -91,7 +102,7 @@ Observacao:
 | --- | --- | --- | --- | --- |
 | `id` | `conversation_id` canonico da operacao | `app.conversations.id` | URL de detalhe, links, filas, joins com mensagens e handoffs | `Pronto para UI` como chave e drilldown; nao precisa ser destaque textual |
 | `client_id` | Cliente dono da conversa | `app.conversations.client_id` | Relacionamento | `Nao exibir`; usar join com cliente |
-| `model_id` | Modelo vinculada | `app.conversations.model_id` | Relacionamento | `Nao exibir`; usar join com modelo |
+| `model_id` | Acompanhante vinculada (coluna FK legada) | `app.conversations.model_id` | Relacionamento | `Nao exibir`; usar join com acompanhante |
 | `state` | Estado operacional (`NOVO`, `QUALIFICANDO`, `NEGOCIANDO`, `CONFIRMADO`, `ESCALADO`) | `app.conversations` | Badge principal, filtros, cards, colunas de tabela | `Pronto para UI` |
 | `state_before_escalation` | Estado anterior ao handoff | `app.conversations` | Auditoria de release ou suporte | `So suporte/operacao`; nao e estado atual |
 | `flow_type` | Tipo do atendimento (`INTERNAL`, `EXTERNAL`, `UNDETERMINED`) | `app.conversations` | Badge, filtros, separacao de fluxos | `Pronto para UI` |
@@ -148,7 +159,7 @@ Observacao:
 | Campo | O que representa | Origem | Como usar na interface | Cuidado |
 | --- | --- | --- | --- | --- |
 | `id` | Identificador do slot | `app.schedule_slots.id` | Chaves, edicao futura, correlacao | `So suporte/operacao` |
-| `model_id` | Modelo dona do slot | `app.schedule_slots.model_id` | Filtro e relacionamento | `UI com contexto`; hoje ha uma modelo ativa no MVP |
+| `model_id` | Acompanhante dona do slot (coluna FK legada) | `app.schedule_slots.model_id` | Filtro e relacionamento | `UI com contexto`; hoje ha uma acompanhante ativa no MVP |
 | `starts_at` | Inicio do slot | `app.schedule_slots` | Agenda, timeline, cards, filtros de periodo | `Pronto para UI` |
 | `ends_at` | Fim do slot | `app.schedule_slots` | Agenda, timeline, cards | `Pronto para UI` |
 | `status` | Estado do slot (`AVAILABLE`, `BLOCKED`, `HELD`, `CONFIRMED`, `CANCELLED`) | `app.schedule_slots` | Cor do slot, legenda, filtros, contadores | `Pronto para UI` |
@@ -169,7 +180,7 @@ Observacao:
 | Campo | O que representa | Origem | Como usar na interface | Cuidado |
 | --- | --- | --- | --- | --- |
 | `id` | Identificador da midia | `app.media_assets.id` | Preview URL, card, auditoria | `Pronto para UI` como chave e drilldown |
-| `model_id` | Modelo associada | `app.media_assets.model_id` | Filtro por modelo, agrupamento | `UI com contexto` |
+| `model_id` | Acompanhante associada (coluna FK legada) | `app.media_assets.model_id` | Filtro por acompanhante, agrupamento | `UI com contexto` |
 | `media_type` | Tipo (`image`, `audio`, `video`, `document`) | `app.media_assets` | Icones, filtros, cards, preview | `Pronto para UI` |
 | `category` | Categoria curada da midia | `app.media_assets` | Filtros, agrupamentos, chips | `Pronto para UI`; tratar vazio como "sem categoria" |
 | `storage_path` | Caminho interno no volume local | `app.media_assets` | Nenhum uso visual | `Nao exibir` |
@@ -277,7 +288,7 @@ Read model: `ConversationRead`
 | Campo derivado | Origem real | Uso recomendado |
 | --- | --- | --- |
 | `client.id`, `client.display_name`, `client.whatsapp_jid`, `client.client_status`, `client.profile_summary`, `client.language_hint` | Join `app.conversations -> app.clients` | Tabela principal, badges, busca e contexto |
-| `model.id`, `model.display_name` | Join `app.conversations -> app.models` | Coluna da modelo |
+| `escort.id`, `escort.display_name` | Join `app.conversations -> app.escorts` | Coluna da acompanhante |
 | `state`, `flow_type`, `handoff_status`, `pending_action`, `awaiting_input_type`, `awaiting_client_decision`, `urgency_profile`, `expected_amount`, `summary`, `last_handoff_at`, `last_message_at` | `app.conversations` | Filtros, badges, cards e filas |
 | `last_message.direction`, `last_message.message_type`, `last_message.content_preview`, `last_message.created_at`, `last_message.delivery_status` | Lateral join com a ultima linha de `app.messages` por conversa; preview = `left(content_text, 240)` | Preview da lista, chips de tipo, indicador de entrega |
 
@@ -504,7 +515,7 @@ Motivo:
 | `whatsapp_jid` | formatar ou mascarar conforme densidade da tela |
 | `expected_amount`, `detected_amount`, `tolerance_applied` | formatar como moeda |
 | `summary`, `profile_summary`, `reason`, `error_summary` | truncar com criterio e manter acesso ao texto completo |
-| `persona_json`, `services_json`, `pricing_json` | transformar em secoes humanas; nao mostrar JSON cru em tela operacional |
+| catalogo (`escort_services`, `escort_locations`, `escort_preferences`, `escort_availability`) | renderizar como tabelas/listas tipadas; persona e regras de qualificacao ficam no system prompt da engenharia |
 | `metadata_json`, `send_constraints_json` | extrair chaves explicitamente permitidas |
 | `last_sync_error` | usar tooltip/expand, nao ocupar area primaria da tabela |
 | `delivery_status` | mapear para labels humanas (`enviando`, `entregue`, `lida`, `falhou`) |

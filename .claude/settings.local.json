@@ -61,7 +61,21 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('apps/api/src/barra_vips_api/main.py', encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(echo \"EXIT:$?\")",
       "Bash(python -m pytest tests/integration/test_read_models_schema.py --collect-only -q)",
-      "Bash(python -m pytest tests/integration/test_read_models_schema.py::TestDashboardSummaryRead --collect-only -q)"
+      "Bash(python -m pytest tests/integration/test_read_models_schema.py::TestDashboardSummaryRead --collect-only -q)",
+      "Bash(npm run *)",
+      "Bash(curl *)",
+      "Bash(echo \"exit=$?\")",
+      "WebSearch",
+      "WebFetch(domain:doc.evolution-api.com)",
+      "mcp__claude_ai_supabase__list_projects",
+      "mcp__claude_ai_supabase__execute_sql",
+      "mcp__claude_ai_supabase__list_migrations",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(git reset *)",
+      "Bash(awk '{print $1}')",
+      "Bash(git add *)"
     ]
   }
 }

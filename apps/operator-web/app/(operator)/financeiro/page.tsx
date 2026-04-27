@@ -6,7 +6,7 @@ export default function FinanceiroPage() {
     <section className="page-stack">
       <PageHeader
         title="Financeiro"
-        description="Pipeline aberto, ticket médio, divergência de comprovantes, crescimento, conversão e receita projetada."
+        description="Quanto recebeu, quanto falta receber e o que precisa de atenção."
       />
       <FinancialClient />
     </section>

@@ -1,12 +1,12 @@
 import { PageHeader } from "@/components/page-header";
-import { DashboardClient } from "@/features/dashboard/dashboard-client";
+import { DashboardClient } from "./dashboard-client";
 
 export default function DashboardPage() {
   return (
-    <section className="page-stack">
+    <section className="page-stack dashboard-page">
       <PageHeader
-        title="Command center SDR"
-        description="Saúde do agente, prioridades humanas, fila ranqueada e sinais do funil em uma única visão operacional."
+        title="Acompanhamento comercial"
+        description="Veja a evolucao dos leads, conversas e receita acompanhada pela equipe."
       />
       <DashboardClient />
     </section>

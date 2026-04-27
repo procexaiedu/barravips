@@ -50,9 +50,9 @@ Se o cliente pedir algo que a modelo nao faz, o agente nega diretamente, com tom
 
 ### Negociacao existe, mas tem limite
 
-A negociacao pode existir, mas precisa respeitar piso configuravel por modelo. O piso fica em `app.models.pricing_json.negotiation_floor_pct`. O exemplo discutido no contexto original foi 15%, mas o valor e por modelo, nao global.
+A negociacao pode existir, mas precisa respeitar piso configurado pela engenharia no system prompt. O exemplo discutido no contexto original foi 15%, mas o valor e por acompanhante, nao global.
 
-Valores, descontos, duracoes e condicoes comerciais nao devem ser inventados no texto do LLM; devem vir de estado operacional ou regras de preco da modelo.
+Valores, descontos, duracoes e condicoes comerciais nao devem ser inventados no texto do LLM; devem vir de catalogo (`app.escort_services`, `app.escort_locations`) lido por tool. Os pisos e regras de negociacao ficam no system prompt definido pela engenharia, fora do alcance do operador.
 
 ## Disponibilidade e agenda operacional
 

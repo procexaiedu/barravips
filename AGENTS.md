@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+## 0. Contexto do Produto
+
+**Estamos construindo, sob contrato, agentes de IA e uma interface operacional para escalar a operação de um cliente real (Fernando) — não um SaaS genérico, não um produto multi-tenant.**
+
+Cada decisão de código serve esse objetivo: o agente conduz conversas no lugar do cliente; a interface dá ao cliente controle e visibilidade sobre o que o agente faz. Volume previsível, operação enxuta, margem zero para alucinação ou perda de contexto.
+
+Em dúvida sobre escopo, pergunte: *"isso ajuda Fernando a atender mais sem contratar mais?"* Se não ajuda, não construa.
+
 ## 1. Pense Antes de Codificar
 
 **Não presuma. Não esconda dúvidas. Exponha os tradeoffs.**

@@ -33,15 +33,11 @@ import {
 const POLL_INTERVAL_MS = 15_000;
 const PAGE_SIZE = 50;
 const STALE_HOURS = 24;
+const VIEW_STORAGE_KEY = "conversas.view";
 
-type ConversationTab =
-  | "todos"
-  | "novos"
-  | "qualificacao"
-  | "quentes"
-  | "aguardando"
-  | "humano"
-  | "sem_resposta";
+type ConversationTab = "todos" | "humano" | "quentes" | "paradas";
+
+type ConversationView = "table" | "kanban";
 
 type SortKey =
   | "priority"
@@ -59,6 +55,7 @@ type Filters = {
   clientStatus: "" | ClientStatus;
   urgencyProfile: "" | UrgencyProfile;
   responsible: ResponsibleFilter;
+  modelId: string;
   sort: SortKey;
   q: string;
   minAmount: string;
@@ -66,14 +63,21 @@ type Filters = {
   page: number;
 };
 
+type KanbanColumnKey = "NOVO" | "QUALIFICANDO" | "NEGOCIANDO" | "CONFIRMADO" | "ESCALADO";
+
+const KANBAN_COLUMNS: Array<{ key: KanbanColumnKey; label: string }> = [
+  { key: "NOVO", label: "Novo contato" },
+  { key: "QUALIFICANDO", label: "Conhecendo cliente" },
+  { key: "NEGOCIANDO", label: "Negociando" },
+  { key: "CONFIRMADO", label: "Fechado" },
+  { key: "ESCALADO", label: "Com a modelo" },
+];
+
 const TABS: Array<{ key: ConversationTab; label: string }> = [
   { key: "todos", label: "Todos" },
-  { key: "novos", label: "Novos" },
-  { key: "qualificacao", label: "Em qualificação" },
-  { key: "quentes", label: "Quentes" },
-  { key: "aguardando", label: "Aguardando resposta" },
   { key: "humano", label: "Precisa humano" },
-  { key: "sem_resposta", label: "Sem resposta" },
+  { key: "quentes", label: "Quentes" },
+  { key: "paradas", label: "Paradas" },
 ];
 
 const FLOW_TYPE_OPTIONS: FlowType[] = ["INTERNAL", "EXTERNAL", "UNDETERMINED"];
@@ -91,6 +95,7 @@ const EMPTY_FILTERS: Filters = {
   clientStatus: "",
   urgencyProfile: "",
   responsible: "",
+  modelId: "",
   sort: "priority",
   q: "",
   minAmount: "",
@@ -119,6 +124,19 @@ export function ConversasClient() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [view, setView] = useState<ConversationView>("table");
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    if (stored === "kanban" || stored === "table") {
+      setView(stored);
+    }
+  }, []);
+
+  const changeView = useCallback((next: ConversationView) => {
+    setView(next);
+    window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+  }, []);
 
   const load = useCallback(async (active: Filters) => {
     setLoading(true);
@@ -127,12 +145,6 @@ export function ConversasClient() {
     params.set("page_size", String(PAGE_SIZE));
     if (active.q.trim()) {
       params.set("q", active.q.trim());
-    }
-    if (active.tab === "novos") {
-      params.set("status", "NOVO");
-    }
-    if (active.tab === "qualificacao") {
-      params.set("status", "QUALIFICANDO");
     }
     if (active.tab === "humano") {
       params.set("handoff_status", "OPENED");
@@ -215,6 +227,18 @@ export function ConversasClient() {
   const activeFilterCount = countAdvancedFilters(committedFilters);
   const selectedConversation =
     detail?.conversation ?? loadedItems.find((conversation) => conversation.id === selectedId) ?? null;
+
+  const modelOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const conversation of loadedItems) {
+      if (!seen.has(conversation.escort.id)) {
+        seen.set(conversation.escort.id, conversation.escort.display_name);
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, display_name]) => ({ id, display_name }))
+      .sort((a, b) => a.display_name.localeCompare(b.display_name, "pt-BR"));
+  }, [loadedItems]);
 
   const amountRangeError = useMemo(() => {
     const min = parseAmountInput(filters.minAmount);
@@ -320,10 +344,26 @@ export function ConversasClient() {
       {actionNotice ? <div className="panel-notice warning">{actionNotice}</div> : null}
 
       <section className="inbox-toolbar" aria-label="Caixa de entrada comercial">
-        <div className="inbox-toolbar-main">
-          <div>
-            <p className="eyebrow">Inbox comercial</p>
-            <h2>Priorize o próximo lead sem sair da lista</h2>
+        <div className="inbox-toolbar-actions">
+          <div className="view-toggle" role="tablist" aria-label="Alternar visualização">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "table"}
+              className={view === "table" ? "active" : undefined}
+              onClick={() => changeView("table")}
+            >
+              Tabela
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "kanban"}
+              className={view === "kanban" ? "active" : undefined}
+              onClick={() => changeView("kanban")}
+            >
+              Kanban
+            </button>
           </div>
           <span className="badge muted">
             {loading ? "Atualizando" : `${envelope?.total ?? 0} conversas`}
@@ -442,6 +482,21 @@ export function ConversasClient() {
                 </select>
               </label>
               <label>
+                <span>Modelo</span>
+                <select
+                  value={filters.modelId}
+                  onChange={(event) => setFilters({ ...filters, modelId: event.target.value })}
+                  disabled={modelOptions.length === 0}
+                >
+                  <option value="">Todas</option>
+                  {modelOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 <span>Ordenação</span>
                 <select
                   value={filters.sort}
@@ -502,6 +557,14 @@ export function ConversasClient() {
 
         {!envelope || visibleItems.length === 0 ? (
           <InboxEmptyState tab={committedFilters.tab} filtersActive={hasAnyFilter(committedFilters)} onReset={onReset} />
+        ) : view === "kanban" ? (
+          <KanbanBoard
+            conversations={visibleItems}
+            selectedId={selectedId}
+            busyId={busyId}
+            onOpen={setSelectedId}
+            onAcknowledge={(conversation) => void onAcknowledge(conversation)}
+          />
         ) : (
           <>
             <div className="table-wrap">
@@ -539,7 +602,6 @@ export function ConversasClient() {
                         Valor {amountSortIndicator(committedFilters.sort)}
                       </button>
                     </th>
-                    <th>Intenção</th>
                     <th>Urgência</th>
                     <th>Próximo passo</th>
                     <th>Última mensagem</th>
@@ -597,10 +659,172 @@ export function ConversasClient() {
           onClose={() => setSelectedId(null)}
           onAcknowledge={() => void onAcknowledge(selectedConversation)}
           onRelease={() => void onRelease(selectedConversation)}
-          onSoftAction={setActionNotice}
         />
       ) : null}
     </div>
+  );
+}
+
+function KanbanBoard({
+  conversations,
+  selectedId,
+  busyId,
+  onOpen,
+  onAcknowledge,
+}: {
+  conversations: ConversationRead[];
+  selectedId: string | null;
+  busyId: string | null;
+  onOpen: (id: string) => void;
+  onAcknowledge: (conversation: ConversationRead) => void;
+}) {
+  const { handoffLane, byColumn } = useMemo(() => {
+    const lane: ConversationRead[] = [];
+    const columns = new Map<KanbanColumnKey, ConversationRead[]>();
+    for (const column of KANBAN_COLUMNS) {
+      columns.set(column.key, []);
+    }
+    for (const conversation of conversations) {
+      if (conversation.handoff_status === "OPENED") {
+        lane.push(conversation);
+        continue;
+      }
+      const bucket = columns.get(conversation.state as KanbanColumnKey);
+      if (bucket) {
+        bucket.push(conversation);
+      }
+    }
+    return { handoffLane: lane, byColumn: columns };
+  }, [conversations]);
+
+  return (
+    <div className="kanban-board" aria-label="Kanban de conversas">
+      {handoffLane.length > 0 ? (
+        <section className="kanban-lane" aria-label="Conversas que precisam de humano">
+          <header className="kanban-lane-header">
+            <h3>Precisa humano</h3>
+            <span className="chip danger">{handoffLane.length}</span>
+          </header>
+          <div className="kanban-lane-body">
+            {handoffLane.map((conversation) => (
+              <KanbanCard
+                key={conversation.id}
+                conversation={conversation}
+                selected={conversation.id === selectedId}
+                busy={busyId === conversation.id}
+                onOpen={() => onOpen(conversation.id)}
+                onAcknowledge={() => onAcknowledge(conversation)}
+                needsHuman
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <div className="kanban-columns">
+        {KANBAN_COLUMNS.map((column) => {
+          const items = byColumn.get(column.key) ?? [];
+          return (
+            <section key={column.key} className="kanban-column" aria-label={`Coluna ${column.label}`}>
+              <header className="kanban-column-header">
+                <h3>{column.label}</h3>
+                <span className="chip">{items.length}</span>
+              </header>
+              <div className="kanban-column-body">
+                {items.length === 0 ? (
+                  <p className="kanban-column-empty">Sem conversas aqui.</p>
+                ) : (
+                  items.map((conversation) => (
+                    <KanbanCard
+                      key={conversation.id}
+                      conversation={conversation}
+                      selected={conversation.id === selectedId}
+                      busy={busyId === conversation.id}
+                      onOpen={() => onOpen(conversation.id)}
+                      onAcknowledge={() => onAcknowledge(conversation)}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function KanbanCard({
+  conversation,
+  selected,
+  busy,
+  onOpen,
+  onAcknowledge,
+  needsHuman = false,
+}: {
+  conversation: ConversationRead;
+  selected: boolean;
+  busy: boolean;
+  onOpen: () => void;
+  onAcknowledge: () => void;
+  needsHuman?: boolean;
+}) {
+  const preview = conversation.last_message?.content_preview || conversation.summary || "";
+  const className = ["kanban-card", selected ? "selected" : "", needsHuman ? "needs-human" : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <article
+      className={className}
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <header className="kanban-card-header">
+        <div className="kanban-card-title">
+          <HealthDot conversation={conversation} />
+          <strong>{leadName(conversation)}</strong>
+        </div>
+        <span className="kanban-card-updated" title={formatDateTime(conversation.last_message_at)}>
+          {formatRelativeSeconds(conversation.last_message_at)}
+        </span>
+      </header>
+      <p className="kanban-card-model">{conversation.escort.display_name}</p>
+      <div className="kanban-card-badges">
+        <UrgencyBadge conversation={conversation} />
+        <ResponsibleBadge conversation={conversation} />
+        <span className="chip">{intentLabel(conversation)}</span>
+        {conversation.expected_amount ? (
+          <span className="chip gold">{formatCurrency(conversation.expected_amount)}</span>
+        ) : null}
+      </div>
+      {preview ? <p className="kanban-card-preview">{truncate(preview, 120)}</p> : null}
+      <footer className="kanban-card-footer">
+        <span className="kanban-card-next">
+          {conversation.pending_action || nextStepFallback(conversation)}
+        </span>
+        {needsHuman ? (
+          <button
+            className="button row-cta"
+            type="button"
+            disabled={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAcknowledge();
+            }}
+          >
+            Assumir
+          </button>
+        ) : null}
+      </footer>
+    </article>
   );
 }
 
@@ -625,7 +849,10 @@ function ConversationRow({
     <tr className={selected ? "clickable selected-row" : "clickable"} onClick={onOpen}>
       <td>
         <div className="lead-cell">
-          <strong>{leadName(conversation)}</strong>
+          <div className="lead-cell-head">
+            <HealthDot conversation={conversation} />
+            <strong>{leadName(conversation)}</strong>
+          </div>
           <span>{conversation.client.whatsapp_jid}</span>
           <ContextBadges conversation={conversation} />
         </div>
@@ -635,9 +862,6 @@ function ConversationRow({
       </td>
       <td className="numeric">
         {conversation.expected_amount ? formatCurrency(conversation.expected_amount) : "-"}
-      </td>
-      <td>
-        <span className="chip">{intentLabel(conversation)}</span>
       </td>
       <td>
         <UrgencyBadge conversation={conversation} />
@@ -682,7 +906,6 @@ function ConversationDrawer({
   onClose,
   onAcknowledge,
   onRelease,
-  onSoftAction,
 }: {
   conversation: ConversationRead;
   detail: ConversationDetailRead | null;
@@ -692,7 +915,6 @@ function ConversationDrawer({
   onClose: () => void;
   onAcknowledge: () => void;
   onRelease: () => void;
-  onSoftAction: (message: string) => void;
 }) {
   const messages = detail?.messages ?? [];
   const handoffEvents = detail?.handoff_events ?? [];
@@ -723,27 +945,6 @@ function ConversationDrawer({
         <button className="button" type="button" disabled={!canAcknowledge || busy} onClick={onAcknowledge}>
           Assumir lead
         </button>
-        <button
-          className="button secondary"
-          type="button"
-          onClick={() => onSoftAction("Compositor de mensagem ainda não tem endpoint dedicado. Abra a conversa completa para responder manualmente.")}
-        >
-          Enviar mensagem
-        </button>
-        <button
-          className="button secondary"
-          type="button"
-          onClick={() => onSoftAction("Lead marcado como qualificado depende de endpoint de etapa. A ação já está posicionada no drawer.")}
-        >
-          Marcar qualificado
-        </button>
-        <button
-          className="button secondary"
-          type="button"
-          onClick={() => onSoftAction("Follow-up depende do fluxo de agenda. O comando fica reservado para a próxima integração.")}
-        >
-          Agendar follow-up
-        </button>
         <button className="button danger" type="button" disabled={!canRelease || busy} onClick={onRelease}>
           Devolver para IA
         </button>
@@ -762,41 +963,34 @@ function ConversationDrawer({
         <p>{conversation.pending_action || nextStepFallback(conversation)}</p>
       </div>
 
-      <div className="drawer-grid">
-        <div className="drawer-section">
-          <h3>Dados coletados</h3>
-          <dl className="compact-kv">
-            <div>
-              <dt>Lead</dt>
-              <dd>{leadName(conversation)}</dd>
-            </div>
-            <div>
-              <dt>Modelo</dt>
-              <dd>{conversation.model.display_name}</dd>
-            </div>
-            <div>
-              <dt>Etapa</dt>
-              <dd>{conversationStateLabel(conversation.state)}</dd>
-            </div>
-            <div>
-              <dt>Tipo</dt>
-              <dd>{flowTypeLabel(conversation.flow_type)}</dd>
-            </div>
-            <div>
-              <dt>Valor</dt>
-              <dd>{formatCurrency(conversation.expected_amount)}</dd>
-            </div>
-            <div>
-              <dt>Perfil</dt>
-              <dd>{conversation.client.profile_summary || clientStatusLabel(conversation.client.client_status) || "-"}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="drawer-section">
-          <h3>Objeções</h3>
-          <ObjectionList conversation={conversation} />
-        </div>
+      <div className="drawer-section">
+        <h3>Dados coletados</h3>
+        <dl className="compact-kv">
+          <div>
+            <dt>Lead</dt>
+            <dd>{leadName(conversation)}</dd>
+          </div>
+          <div>
+            <dt>Modelo</dt>
+            <dd>{conversation.escort.display_name}</dd>
+          </div>
+          <div>
+            <dt>Etapa</dt>
+            <dd>{conversationStateLabel(conversation.state)}</dd>
+          </div>
+          <div>
+            <dt>Tipo</dt>
+            <dd>{flowTypeLabel(conversation.flow_type)}</dd>
+          </div>
+          <div>
+            <dt>Valor</dt>
+            <dd>{conversation.expected_amount ? formatCurrency(conversation.expected_amount) : "-"}</dd>
+          </div>
+          <div>
+            <dt>Perfil</dt>
+            <dd>{conversation.client.profile_summary || clientStatusLabel(conversation.client.client_status) || "-"}</dd>
+          </div>
+        </dl>
       </div>
 
       <div className="drawer-section">
@@ -809,11 +1003,14 @@ function ConversationDrawer({
         {messages.length === 0 ? (
           <p className="empty-state">Sem mensagens carregadas para esta conversa.</p>
         ) : (
-          <div className="timeline drawer-timeline">
-            {messages.slice(0, 8).map((message) => (
-              <DrawerMessageEntry key={message.id} message={message} />
-            ))}
-          </div>
+          <>
+            <p className="message-counts">{formatMessageCounts(messageCounts(messages))}</p>
+            <div className="timeline drawer-timeline">
+              {messages.slice(0, 8).map((message) => (
+                <DrawerMessageEntry key={message.id} message={message} />
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -879,6 +1076,16 @@ function ContextBadges({ conversation }: { conversation: ConversationRead }) {
   return <div className="lead-badges">{badges}</div>;
 }
 
+function HealthDot({ conversation }: { conversation: ConversationRead }) {
+  const health = agentHealth(conversation);
+  const labels: Record<AgentHealth, string> = {
+    ok: "IA conduzindo bem",
+    attention: "Atenção: conversa parada",
+    intervention: "Intervenção: aguardando humano",
+  };
+  return <span className={`health-dot ${health}`} aria-label={labels[health]} title={labels[health]} />;
+}
+
 function amountSortIndicator(sort: SortKey): string {
   if (sort === "amount_desc") return "↓";
   if (sort === "amount_asc") return "↑";
@@ -915,29 +1122,6 @@ function ResponsibleBadge({ conversation }: { conversation: ConversationRead }) 
   return <span className="chip">IA</span>;
 }
 
-function ObjectionList({ conversation }: { conversation: ConversationRead }) {
-  const summary = `${conversation.summary ?? ""} ${conversation.last_message?.content_preview ?? ""}`.toLowerCase();
-  const objections = [
-    summary.includes("preço") || summary.includes("valor") ? "Preço ou condição comercial" : null,
-    summary.includes("agenda") || summary.includes("horário") ? "Agenda ou disponibilidade" : null,
-    summary.includes("pagamento") || summary.includes("pix") || summary.includes("comprovante") ? "Pagamento" : null,
-    summary.includes("depois") || summary.includes("amanhã") ? "Sem urgência imediata" : null,
-    conversation.flow_type === "UNDETERMINED" ? "Tipo de atendimento indefinido" : null,
-  ].filter(Boolean);
-
-  if (objections.length === 0) {
-    return <p className="empty-state">Nenhuma objeção explícita detectada nos dados disponíveis.</p>;
-  }
-
-  return (
-    <ul className="objection-list">
-      {objections.map((objection) => (
-        <li key={objection}>{objection}</li>
-      ))}
-    </ul>
-  );
-}
-
 function DrawerMessageEntry({ message }: { message: ConversationMessageRead }) {
   const directionLabel = message.direction === "INBOUND" ? "lead" : message.role === "human" ? "humano" : "IA";
   return (
@@ -970,17 +1154,11 @@ function HandoffEventSummary({ event }: { event: HandoffEventRead }) {
 
 function matchesTab(conversation: ConversationRead, tab: ConversationTab): boolean {
   switch (tab) {
-    case "novos":
-      return conversation.state === "NOVO";
-    case "qualificacao":
-      return conversation.state === "QUALIFICANDO";
-    case "quentes":
-      return isHotLead(conversation);
-    case "aguardando":
-      return Boolean(conversation.awaiting_client_decision);
     case "humano":
       return conversation.handoff_status === "OPENED";
-    case "sem_resposta":
+    case "quentes":
+      return isHotLead(conversation);
+    case "paradas":
       return isStale(conversation);
     case "todos":
     default:
@@ -996,6 +1174,9 @@ function matchesAdvancedFilters(conversation: ConversationRead, filters: Filters
     return false;
   }
   if (filters.urgencyProfile && conversation.urgency_profile !== filters.urgencyProfile) {
+    return false;
+  }
+  if (filters.modelId && conversation.escort.id !== filters.modelId) {
     return false;
   }
   if (filters.responsible === "ai" && conversation.handoff_status !== "NONE") {
@@ -1080,12 +1261,46 @@ function isStale(conversation: ConversationRead): boolean {
   return Date.now() - new Date(conversation.last_message_at).getTime() > STALE_HOURS * 60 * 60 * 1000;
 }
 
+type AgentHealth = "ok" | "attention" | "intervention";
+
+function agentHealth(conversation: ConversationRead): AgentHealth {
+  if (conversation.handoff_status === "OPENED") return "intervention";
+  if (isStale(conversation)) return "attention";
+  return "ok";
+}
+
+type MessageCounts = {
+  total: number;
+  ia: number;
+  lead: number;
+  humano: number;
+};
+
+function messageCounts(messages: ConversationMessageRead[]): MessageCounts {
+  const counts: MessageCounts = { total: messages.length, ia: 0, lead: 0, humano: 0 };
+  for (const message of messages) {
+    if (message.role === "client") counts.lead += 1;
+    else if (message.role === "human") counts.humano += 1;
+    else if (message.role === "agent") counts.ia += 1;
+  }
+  return counts;
+}
+
+function formatMessageCounts(counts: MessageCounts): string {
+  const parts: string[] = [`${counts.total} ${counts.total === 1 ? "mensagem" : "mensagens"}`];
+  parts.push(`IA ${counts.ia}`);
+  parts.push(`lead ${counts.lead}`);
+  if (counts.humano > 0) parts.push(`humano ${counts.humano}`);
+  return parts.join(" · ");
+}
+
 function countAdvancedFilters(filters: Filters): number {
   return [
     filters.flowType,
     filters.clientStatus,
     filters.urgencyProfile,
     filters.responsible,
+    filters.modelId,
     filters.minAmount.trim(),
     filters.maxAmount.trim(),
   ].filter(Boolean).length;
@@ -1166,15 +1381,10 @@ function emptyCopy(tab: ConversationTab, filtersActive: boolean): { title: strin
         title: "Nenhum lead quente no momento",
         description: "Leads com intenção forte, valor combinado ou urgência imediata serão destacados aqui.",
       };
-    case "sem_resposta":
+    case "paradas":
       return {
-        title: "Nenhuma conversa sem resposta",
-        description: "Conversas paradas por mais de 24 horas aparecem aqui para revisão.",
-      };
-    case "aguardando":
-      return {
-        title: "Nenhum lead aguardando resposta",
-        description: "Quando o próximo movimento depender do lead, a conversa entra nesta aba.",
+        title: "Nenhuma conversa parada",
+        description: "Conversas sem movimento há mais de 24 horas aparecem aqui para revisão.",
       };
     default:
       return {

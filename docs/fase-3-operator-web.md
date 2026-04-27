@@ -15,7 +15,7 @@ Resultado esperado:
 
 ## Decisoes fechadas
 
-- `GET /api/models/active` e P0 para a tela `/modelos` e para o dashboard.
+- `GET /api/escorts/active` e P0 para a tela `/acompanhantes` e para o dashboard.
 - `operator-web` precisa de barreira de acesso propria alem da `OPERATOR_API_KEY` usada entre Next.js e FastAPI.
 - `/api/schedule/sync` fica oculto enquanto retornar `manual_stub`.
 - `/dashboard` entra como primeira tela operacional; `/` redireciona para `/dashboard`.
@@ -80,7 +80,7 @@ Fluxo seguro:
 | `app/(operator)/handoffs` | fila de handoffs abertos/reconhecidos | conversations filtradas, handoff POSTs | atribuicao multiusuario |
 | `app/(operator)/agenda` | slots e bloqueio manual | schedule slots, block | calendario drag/drop |
 | `app/(operator)/midias` | catalogo, upload, preview, aprovacao | media list/upload/patch/content | taxonomia rigida |
-| `app/(operator)/modelos` | leitura da modelo ativa | `GET /api/models/active` | edicao de persona/preco |
+| `app/(operator)/acompanhantes` | leitura da modelo ativa | `GET /api/escorts/active` | edicao de persona/preco |
 | `app/(operator)/status` | saude tecnica minima | status endpoints | status falso de servicos nao integrados |
 | `app/api/operator/**` | proxy server-side para FastAPI | todos os endpoints consumidos | regra de negocio nova |
 | `src/server` | cliente backend, env, erros | todos | imports em Client Components |
@@ -100,7 +100,7 @@ Rotas finais:
 /handoffs
 /agenda
 /midias
-/modelos
+/acompanhantes
 /status
 ```
 
@@ -115,13 +115,13 @@ A tela NAO mostra mais status tecnico bruto (health, Evolution, Calendar). Isso 
 Layout:
 
 - bloco de numeros operacionais: total de conversas recentes carregadas, handoffs `OPENED`, handoffs `ACKNOWLEDGED`, slots no periodo proximo;
-- atalhos para `/conversas`, `/handoffs`, `/agenda`, `/midias`, `/modelos`, `/status`;
+- atalhos para `/conversas`, `/handoffs`, `/agenda`, `/midias`, `/acompanhantes`, `/status`;
 - conversas por estado (`NOVO`, `QUALIFICANDO`, `NEGOCIANDO`, `CONFIRMADO`, `ESCALADO`);
 - conversas por tipo de fluxo (`UNDETERMINED`, `INTERNAL`, `EXTERNAL`);
 - conversas por handoff;
 - agenda resumida: total no periodo, bloqueios, pendentes de sync, com erro de sync;
 - midias por aprovacao (`PENDING`, `APPROVED`, `REJECTED`, `REVOKED`);
-- pendencias da modelo ativa: `PENDING_DECISION` detectado em `persona_json`/`services_json`/`pricing_json`, idiomas vazios e `calendar_external_id` ausente.
+- pendencias da acompanhante ativa: nome, idiomas, `calendar_external_id`, ao menos 1 servico e ao menos 1 local cadastrado.
 
 Fontes:
 
@@ -129,7 +129,7 @@ Fontes:
 - `GET /api/operator/conversations?handoff_status=OPENED&page_size=1` e `ACKNOWLEDGED&page_size=1` para totais via envelope;
 - `GET /api/operator/schedule/slots?from=<now>&to=<now+14d>&page_size=100`;
 - `GET /api/operator/media?page_size=100`;
-- `GET /api/operator/models/active`.
+- `GET /api/operator/escorts/active`.
 
 Polling:
 
@@ -326,32 +326,32 @@ Fora:
 - analytics de uso;
 - migracao para S3/MinIO.
 
-### `/modelos`
+### `/acompanhantes`
 
 Objetivo: leitura da unica modelo ativa e das pendencias humanas.
 
 Endpoint P0:
 
-- `GET /api/models/active`.
+- `GET /api/escorts/active`.
 
 Campos:
 
 - `id`;
 - `display_name`;
 - `is_active`;
-- `persona_json`;
-- `services_json`;
-- `pricing_json`;
 - `languages`;
 - `calendar_external_id`;
+- `photo_main_path`;
 - `created_at`;
 - `updated_at`.
 
+Detalhes adicionais (`GET /api/operator/escorts/{id}`) trazem `services`, `locations`, `preferences` e `availability` como listas tipadas.
+
 Comportamento:
 
-- valores `PENDING_DECISION` viram badges de pendencia;
-- JSON exibido de forma legivel;
-- nenhuma edicao no MVP.
+- catalogo (servicos, locais, preferencias, agenda) editavel pelo operador via formulario por aba;
+- persona, vocabulario e regras de qualificacao ficam no system prompt definido pela engenharia, fora da UI;
+- pendencias geram badges no checklist do dashboard.
 
 Decisoes humanas pendentes:
 
@@ -393,7 +393,7 @@ Fora:
 | Entidade | Onde aparece | API atual cobre? | Lacuna |
 | --- | --- | --- | --- |
 | `app.clients` | conversas, detalhe, handoffs | parcial | `client_status`, `profile_summary`, `language_hint` |
-| `app.models` | briefs em varias telas; `/modelos` | parcial | falta `GET /api/models/active` |
+| `app.escorts` | briefs em varias telas; `/acompanhantes` | parcial | falta `GET /api/escorts/active` |
 | `app.conversations` | conversas, detalhe, dashboard, handoffs | parcial | `summary`, `expected_amount`, `urgency_profile`, `awaiting_client_decision`, `last_handoff_at` |
 | `app.messages` | detalhe | parcial | `media_id` e metadados de midia por mensagem |
 | `app.handoff_events` | detalhe, handoffs | parcial | ultimo motivo/evento na lista |
@@ -413,7 +413,7 @@ Fora:
 | `/handoffs` | conversations filtradas, handoff POSTs | conversas em handoff | acknowledge, release |
 | `/agenda` | slots, block, calendar status | slots e sync status | bloquear |
 | `/midias` | media list/upload/patch/content | midias e metadata | upload, aprovar/rejeitar/revogar, preview |
-| `/modelos` | `GET /api/models/active` | configuracao ativa | nenhuma |
+| `/acompanhantes` | `GET /api/escorts/active` | configuracao ativa | nenhuma |
 | `/status` | health, evolution, calendar | saude tecnica | nenhuma |
 
 ## Gaps de API e read model
@@ -422,7 +422,7 @@ Fora:
 
 | Gap | Mudanca |
 | --- | --- |
-| Tela `/modelos` sem fonte real | Criar `ModelRead` e `GET /api/models/active` |
+| Tela `/acompanhantes` sem fonte real | Criar `EscortRead` e `GET /api/escorts/active` |
 | `operator-web` sem barreira de acesso humana | Definir Basic Auth/reverse proxy/VPN ou sessao simples no Next antes de expor |
 | Contratos TS sem fonte unica | Gerar tipos TS a partir de OpenAPI/schema |
 
@@ -575,7 +575,7 @@ Nao mostrar status verde para componentes ainda inexistentes.
 - Release exige confirmacao.
 - Agenda bloqueia slot e mostra conflito.
 - Midias permitem upload, preview autenticado e patch de aprovacao.
-- `/modelos` exibe a modelo ativa via `GET /api/models/active`.
+- `/acompanhantes` exibe a modelo ativa via `GET /api/escorts/active`.
 - `/dashboard` mostra numeros e filas operacionais (conversas, handoffs, agenda resumida, midias, pendencias da modelo) e NAO status tecnico bruto.
 - `/status` concentra saude tecnica: health, Evolution e Calendar.
 - Playwright valida desktop e mobile sem sobreposicao visual relevante.
@@ -583,7 +583,7 @@ Nao mostrar status verde para componentes ainda inexistentes.
 
 ## Plano de implementacao
 
-1. API P0: adicionar `ModelRead` e `GET /api/models/active`.
+1. API P0: adicionar `EscortRead` e `GET /api/escorts/active`.
 2. Gerar contratos TypeScript a partir da API.
 3. Scaffold Next.js em `apps/operator-web`.
 4. Implementar env server-only, BFF e cliente backend.
@@ -607,7 +607,7 @@ Entregue nesta fatia:
 - Tipos TypeScript locais alinhados aos contratos Pydantic em `src/contracts/index.ts` (geracao a partir do OpenAPI fica como evolucao futura).
 - `/dashboard` reescrito como tela de insights/numeros/filas operacionais com atalhos para as demais rotas; nao afirma mais saude tecnica.
 - `/status` ampliada para concentrar health, Evolution e Calendar tecnicos, com bloco explicito listando integracoes sem endpoint dedicado.
-- `/modelos` exibe a modelo ativa, suas pendencias humanas (`PENDING_DECISION`, idiomas vazios, `calendar_external_id` ausente) e JSONs completos read-only.
+- `/acompanhantes` exibe a modelo ativa, suas pendencias humanas (`PENDING_DECISION`, idiomas vazios, `calendar_external_id` ausente) e JSONs completos read-only.
 - `/conversas` com filtros por estado/handoff/busca e paginacao basica (25/pagina).
 - `/conversas/[id]` com timeline, estado estruturado, eventos de handoff, ultima execucao do agente, midias vinculadas e acoes de acknowledge/release com confirmacao e tratamento de 409.
 - `/handoffs` com secoes `OPENED` e `ACKNOWLEDGED`, acoes inline e modal de confirmacao para release.

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
-import type { DashboardSummaryRead, ModelRead, PaginatedEnvelope, ReceiptRead } from "@/contracts";
+import type { DashboardSummaryRead, EscortRead, PaginatedEnvelope, ReceiptRead } from "@/contracts";
 import { bffFetch } from "@/features/shared/bff-client";
 
 const NAV_POLL_MS = 30_000;
@@ -20,7 +20,7 @@ const NAV_GROUPS = [
     links: [
       { href: "/dashboard", label: "Operação hoje", countKey: null },
       { href: "/conversas", label: "Conversas", countKey: null },
-      { href: "/handoffs", label: "Leads para assumir", countKey: "handoffs" as const },
+      { href: "/handoffs", label: "Escaladas para a modelo", countKey: "handoffs" as const },
       { href: "/comprovantes", label: "Comprovantes", countKey: "pagamentos" as const },
       { href: "/agenda", label: "Agenda", countKey: null },
       { href: "/financeiro", label: "Financeiro", countKey: null },
@@ -35,7 +35,7 @@ const NAV_GROUPS = [
   {
     label: "CONFIGURAÇÃO",
     links: [
-      { href: "/agentes", label: "Agentes", countKey: null },
+      { href: "/acompanhantes", label: "Acompanhantes", countKey: null },
       { href: "/status", label: "Saúde da operação", countKey: null },
     ],
   },
@@ -57,12 +57,12 @@ export function OperatorNav({ userEmail = null }: OperatorNavProps) {
 
   useEffect(() => {
     const load = async () => {
-      const [summary, receipts, model] = await Promise.all([
+      const [summary, receipts, escort] = await Promise.all([
         bffFetch<DashboardSummaryRead>("/api/operator/dashboard/summary?window=24h"),
         bffFetch<PaginatedEnvelope<ReceiptRead>>(
           "/api/operator/receipts?needs_review=true&page_size=1",
         ),
-        bffFetch<ModelRead>("/api/operator/models/active"),
+        bffFetch<EscortRead>("/api/operator/escorts/active"),
       ]);
 
       setCounts({
@@ -71,8 +71,8 @@ export function OperatorNav({ userEmail = null }: OperatorNavProps) {
       });
 
       setAgent(
-        model.data
-          ? { name: model.data.display_name, active: model.data.is_active }
+        escort.data
+          ? { name: escort.data.display_name, active: escort.data.is_active }
           : null,
       );
     };
@@ -92,11 +92,11 @@ export function OperatorNav({ userEmail = null }: OperatorNavProps) {
       <div className={agent ? "agent-pill" : "agent-pill empty"}>
         <span className={`agent-pill-dot ${agent?.active ? "active" : "inactive"}`} />
         <span className="agent-pill-name">
-          {agent ? agent.name : "Sem agente ativo"}
+          {agent ? agent.name : "Sem acompanhante ativa"}
         </span>
         {agent ? (
           <span className={`agent-pill-status ${agent.active ? "" : "inactive"}`}>
-            {agent.active ? "Ativo" : "Inativo"}
+            {agent.active ? "Ativa" : "Inativa"}
           </span>
         ) : null}
       </div>

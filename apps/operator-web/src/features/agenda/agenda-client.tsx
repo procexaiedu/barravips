@@ -1,28 +1,45 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
-  CalendarStatusRead,
-  CalendarSyncStatus,
+  EscortRead,
   PaginatedEnvelope,
   ScheduleSlotRead,
   ScheduleSlotStatus,
   ScheduleSource,
 } from "@/contracts";
 import { bffFetch, bffSend, type BffFetchError } from "@/features/shared/bff-client";
+import { formatDayLabel, formatNumber } from "@/features/shared/formatters";
+import { scheduleSlotLabel, scheduleSourceLabel } from "@/features/shared/labels";
+
+import { ModelChipBar } from "./model-chip";
 import {
-  formatDateKey,
-  formatDateTime,
-  formatDayLabel,
-  formatNumber,
-  formatTime,
-} from "@/features/shared/formatters";
-import { calendarSyncLabel, scheduleSlotLabel, scheduleSourceLabel } from "@/features/shared/labels";
+  AGENDA_VIEWS,
+  type AgendaView,
+  type Filters,
+  filterSlots,
+  summarizeSlots,
+  toDateTimeLocal,
+  toIsoOrNull,
+} from "./shared";
+import { SlotDrawer } from "./slot-drawer";
+import {
+  classifyBlockError,
+  classifyFetchError,
+  type SystemEventOutcome,
+} from "./system-event-router";
+import { AgendaListView } from "./views/agenda-list-view";
+import { DayView } from "./views/day-view";
+import { KanbanView } from "./views/kanban-view";
+import { MonthView } from "./views/month-view";
+import { WeekView } from "./views/week-view";
 
 const POLL_INTERVAL_MS = 30_000;
 const DEFAULT_WINDOW_DAYS = 7;
 const PAGE_SIZE = 100;
+const VIEW_STORAGE_KEY = "agenda.view";
 
 const STATUS_OPTIONS: ScheduleSlotStatus[] = [
   "AVAILABLE",
@@ -32,17 +49,6 @@ const STATUS_OPTIONS: ScheduleSlotStatus[] = [
   "CANCELLED",
 ];
 const SOURCE_OPTIONS: ScheduleSource[] = ["CALENDAR_SYNC", "MANUAL", "AUTO_BLOCK"];
-const CALENDAR_SYNC_STATUS_OPTIONS: CalendarSyncStatus[] = ["PENDING", "SYNCED", "ERROR"];
-
-type Filters = {
-  from: string;
-  to: string;
-  status: "" | ScheduleSlotStatus;
-  source: "" | ScheduleSource;
-  calendar_sync_status: "" | CalendarSyncStatus;
-};
-
-type OperationalTone = "ok" | "warning" | "danger";
 
 function defaultFilters(): Filters {
   const now = new Date();
@@ -52,18 +58,20 @@ function defaultFilters(): Filters {
     to: toDateTimeLocal(to),
     status: "",
     source: "",
-    calendar_sync_status: "",
   };
+}
+
+function isAgendaView(value: string | null): value is AgendaView {
+  return value === "week" || value === "day" || value === "month" || value === "list" || value === "kanban";
 }
 
 export function AgendaClient() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [committed, setCommitted] = useState<Filters>(filters);
   const [envelope, setEnvelope] = useState<PaginatedEnvelope<ScheduleSlotRead> | null>(null);
-  const [calendarStatus, setCalendarStatus] = useState<CalendarStatusRead | null>(null);
   const [error, setError] = useState<BffFetchError | null>(null);
-  const [calendarError, setCalendarError] = useState<BffFetchError | null>(null);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<AgendaView>("week");
 
   const [blockForm, setBlockForm] = useState({
     starts_at: "",
@@ -74,6 +82,75 @@ export function AgendaClient() {
   const [blockNotice, setBlockNotice] = useState<{ tone: "ok" | "error"; message: string } | null>(
     null,
   );
+  const [blockModalOpen, setBlockModalOpen] = useState(false);
+
+  const openBlockModal = useCallback(() => {
+    setBlockNotice(null);
+    setBlockForm({ starts_at: "", ends_at: "", reason: "" });
+    setBlockModalOpen(true);
+  }, []);
+
+  const closeBlockModal = useCallback(() => {
+    if (blockBusy) return;
+    setBlockModalOpen(false);
+    setBlockNotice(null);
+  }, [blockBusy]);
+
+  useEffect(() => {
+    if (!blockModalOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") closeBlockModal();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [blockModalOpen, closeBlockModal]);
+  const [selectedSlot, setSelectedSlot] = useState<ScheduleSlotRead | null>(null);
+  const [models, setModels] = useState<EscortRead[]>([]);
+  const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    if (isAgendaView(stored)) {
+      setView(stored);
+    }
+  }, []);
+
+  const changeView = useCallback((next: AgendaView) => {
+    setView(next);
+    window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (target?.isContentEditable) return;
+      const key = event.key.toLowerCase();
+      switch (key) {
+        case "w":
+          changeView("week");
+          break;
+        case "d":
+          changeView("day");
+          break;
+        case "m":
+          changeView("month");
+          break;
+        case "a":
+          changeView("list");
+          break;
+        case "k":
+          changeView("kanban");
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [changeView]);
 
   const load = useCallback(async (active: Filters) => {
     setLoading(true);
@@ -86,22 +163,39 @@ export function AgendaClient() {
     if (toIso) params.set("to", toIso);
     if (active.status) params.set("status", active.status);
     if (active.source) params.set("source", active.source);
-    if (active.calendar_sync_status) {
-      params.set("calendar_sync_status", active.calendar_sync_status);
-    }
 
-    const [slots, calendar] = await Promise.all([
-      bffFetch<PaginatedEnvelope<ScheduleSlotRead>>(
-        `/api/operator/schedule/slots?${params.toString()}`,
-      ),
-      bffFetch<CalendarStatusRead>("/api/operator/status/calendar"),
-    ]);
+    const slots = await bffFetch<PaginatedEnvelope<ScheduleSlotRead>>(
+      `/api/operator/schedule/slots?${params.toString()}`,
+    );
 
     setEnvelope(slots.data);
     setError(slots.error);
-    setCalendarStatus(calendar.data);
-    setCalendarError(calendar.error);
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const result = await bffFetch<EscortRead[] | { items: EscortRead[] }>("/api/operator/escorts");
+      if (cancelled || !result.data) return;
+      const list = Array.isArray(result.data) ? result.data : result.data.items;
+      setModels(list ?? []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleModel = useCallback((id: string) => {
+    setSelectedModelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -120,16 +214,23 @@ export function AgendaClient() {
     [filters],
   );
 
-  const visibleSlots = useMemo(
-    () => filterSlots(envelope?.items ?? [], committed),
-    [committed, envelope],
-  );
-
-  const weekDays = useMemo(() => buildWeekDays(committed.from, visibleSlots), [committed.from, visibleSlots]);
+  const visibleSlots = useMemo(() => {
+    const base = filterSlots(envelope?.items ?? [], committed);
+    if (selectedModelIds.size === 0) return base;
+    return base.filter((slot) => selectedModelIds.has(slot.model_id));
+  }, [committed, envelope, selectedModelIds]);
   const stats = useMemo(() => summarizeSlots(visibleSlots), [visibleSlots]);
-  const readiness = useMemo(
-    () => agendaReadiness(stats, calendarStatus, Boolean(error)),
-    [calendarStatus, error, stats],
+
+  const selectDayFromMonth = useCallback(
+    (isoDate: string) => {
+      const newFrom = `${isoDate}T00:00`;
+      const newTo = `${isoDate}T23:59`;
+      const next = { ...committed, from: newFrom, to: newTo };
+      setFilters(next);
+      setCommitted(next);
+      changeView("day");
+    },
+    [changeView, committed],
   );
 
   const onBlockSubmit = useCallback(
@@ -139,11 +240,11 @@ export function AgendaClient() {
       const startsIso = toIsoOrNull(blockForm.starts_at);
       const endsIso = toIsoOrNull(blockForm.ends_at);
       if (!startsIso || !endsIso) {
-        setBlockNotice({ tone: "error", message: "Informe o inicio e o fim do bloqueio." });
+        setBlockNotice({ tone: "error", message: "Informe o início e o fim do bloqueio." });
         return;
       }
       if (new Date(endsIso).getTime() <= new Date(startsIso).getTime()) {
-        setBlockNotice({ tone: "error", message: "O fim precisa ser depois do inicio." });
+        setBlockNotice({ tone: "error", message: "O fim precisa ser depois do início." });
         return;
       }
       setBlockBusy(true);
@@ -154,11 +255,14 @@ export function AgendaClient() {
       });
       setBlockBusy(false);
       if (result.error) {
-        setBlockNotice({ tone: "error", message: blockErrorMessage(result.error.status) });
+        const outcome = classifyBlockError(result.error.status);
+        if (outcome.class === "toast" || outcome.class === "banner") {
+          setBlockNotice({ tone: "error", message: outcome.message });
+        }
       } else {
         setBlockNotice({
           tone: "ok",
-          message: "Periodo bloqueado. O agente nao vai oferecer esse horario.",
+          message: "Período bloqueado. O agente não vai oferecer esse horário.",
         });
         setBlockForm({ starts_at: "", ends_at: "", reason: "" });
         await load(committed);
@@ -168,55 +272,58 @@ export function AgendaClient() {
   );
 
   return (
-    <div className="section-stack">
-      <section className={`operations-hero ${readiness.tone}`}>
-        <div className="operations-hero-copy">
-          <span className="badge muted">Status da agenda</span>
-          <h2>{readiness.title}</h2>
-          <p>{readiness.description}</p>
+    <div className="section-stack agenda-shell">
+      <section className="agenda-summary">
+        <div className="agenda-summary-copy">
+          <span className="agenda-summary-line">
+            <strong>{formatNumber(stats.confirmed)}</strong> confirmados
+            <span className="agenda-summary-sep">·</span>
+            <strong>{formatNumber(stats.negotiating)}</strong> em negociação
+          </span>
+          <span className="agenda-summary-range">
+            {formatDayLabel(committed.from.slice(0, 10))} → {formatDayLabel(committed.to.slice(0, 10))}
+          </span>
         </div>
-        <div className="operations-hero-actions">
-          <a className="button" href="#regras-agendamento">
-            Adicionar disponibilidade
-          </a>
-          <a className="button secondary" href="#bloquear-periodo">
-            Bloquear periodo
-          </a>
-          <a className="button secondary" href="/status">
-            Conectar Google Calendar
-          </a>
+        <div className="agenda-summary-actions">
+          <button className="button" type="button" onClick={openBlockModal}>
+            Bloquear período
+          </button>
         </div>
-      </section>
-
-      <section className="metric-grid compact" aria-label="Resumo da agenda">
-        <MetricCard label="Horarios livres" value={stats.available} detail="podem ser oferecidos ao lead" />
-        <MetricCard label="Reservados" value={stats.reserved} detail="em negociacao ou confirmados" />
-        <MetricCard label="Bloqueados" value={stats.blocked} detail="fora da oferta do agente" />
-        <MetricCard label="Erros de sync" value={stats.errors} detail="precisam de revisao" danger={stats.errors > 0} />
-        <MetricCard label="Sync pendente" value={stats.pending} detail="aguardando Calendar" warning={stats.pending > 0} />
-        <MetricCard
-          label="Fonte ativa"
-          value={calendarSourceLabel(calendarStatus)}
-          detail={calendarStatus?.last_synced_at ? `ultima sync ${formatDateTime(calendarStatus.last_synced_at)}` : "agenda local"}
-        />
       </section>
 
       <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Semana operacional</h2>
-            <p className="section-subtitle">
-              Visualizacao padrao para saber se o agente pode oferecer horarios sem conflito.
-            </p>
+        <div className="agenda-view-toolbar">
+          <div
+            className="view-toggle agenda-view-toggle"
+            role="tablist"
+            aria-label="Alternar visualização da agenda"
+          >
+            {AGENDA_VIEWS.map((entry) => (
+              <button
+                key={entry.key}
+                type="button"
+                role="tab"
+                aria-selected={view === entry.key}
+                className={view === entry.key ? "active" : undefined}
+                onClick={() => changeView(entry.key)}
+                title={`Atalho: ${entry.shortcut}`}
+              >
+                {entry.label}
+              </button>
+            ))}
           </div>
-          <span className={loading ? "badge warning" : "badge muted"}>
-            {loading ? "Atualizando" : `${formatNumber(envelope?.total ?? 0)} horarios`}
-          </span>
+          <div className="agenda-view-toolbar-end">
+            <span className={loading ? "badge warning" : "badge muted"}>
+              {loading ? "Atualizando" : `${formatNumber(envelope?.total ?? 0)} horários`}
+            </span>
+            <Link className="link-pill" href="/agenda/configuracoes">
+              ⚙ Configurações
+            </Link>
+          </div>
         </div>
 
-        {error ? <div className="panel-notice">{error.message}</div> : null}
-        {calendarError ? <div className="panel-notice warning">{calendarError.message}</div> : null}
-        {calendarStatus ? <CalendarStatusNotice calendar={calendarStatus} /> : null}
+        <SystemEventBanner outcome={classifyFetchError(error)} />
+        <SystemEventToast outcome={classifyFetchError(error)} />
 
         <form className="filter-bar" onSubmit={onSubmit} aria-label="Filtros da agenda">
           <label>
@@ -228,7 +335,7 @@ export function AgendaClient() {
             />
           </label>
           <label>
-            <span>Ate</span>
+            <span>Até</span>
             <input
               type="datetime-local"
               value={filters.to}
@@ -236,7 +343,7 @@ export function AgendaClient() {
             />
           </label>
           <label>
-            <span>Situacao</span>
+            <span>Situação</span>
             <select
               value={filters.status}
               onChange={(e) =>
@@ -267,25 +374,6 @@ export function AgendaClient() {
               ))}
             </select>
           </label>
-          <label>
-            <span>Sync Calendar</span>
-            <select
-              value={filters.calendar_sync_status}
-              onChange={(e) =>
-                setFilters({
-                  ...filters,
-                  calendar_sync_status: e.target.value as Filters["calendar_sync_status"],
-                })
-              }
-            >
-              <option value="">Todos</option>
-              {CALENDAR_SYNC_STATUS_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {calendarSyncLabel(opt)}
-                </option>
-              ))}
-            </select>
-          </label>
           <div className="form-field">
             <span>&nbsp;</span>
             <button className="button" type="submit">
@@ -294,170 +382,185 @@ export function AgendaClient() {
           </div>
         </form>
 
-        <div className="schedule-legend" aria-label="Legenda da agenda">
-          <span><i className="slot-dot available" /> Livre</span>
-          <span><i className="slot-dot reserved" /> Reservado</span>
-          <span><i className="slot-dot blocked" /> Bloqueado</span>
-          <span><i className="slot-dot error" /> Erro de sync</span>
-        </div>
+        <ModelChipBar models={models} selected={selectedModelIds} onToggle={toggleModel} />
 
-        <div className="schedule-week-grid">
-          {weekDays.map((day) => (
-            <article className="schedule-day" key={day.key}>
-              <header>
-                <strong>{formatDayLabel(day.key)}</strong>
-                <span>{day.items.length} itens</span>
-              </header>
-              {day.items.length === 0 ? (
-                <p className="schedule-day-empty">Sem horarios neste dia.</p>
-              ) : (
-                <div className="schedule-slot-list">
-                  {day.items.map((slot) => (
-                    <ScheduleSlotCard key={slot.id} slot={slot} />
-                  ))}
-                </div>
-              )}
-            </article>
-          ))}
-        </div>
+        {view !== "kanban" && view !== "month" ? (
+          <div className="schedule-legend" aria-label="Legenda da agenda">
+            <span><i className="slot-dot available" /> Livre</span>
+            <span><i className="slot-dot reserved" /> Reservado</span>
+            <span><i className="slot-dot blocked" /> Bloqueado</span>
+          </div>
+        ) : null}
 
-        {visibleSlots.length === 0 ? (
+        {renderView(view, visibleSlots, committed, selectDayFromMonth, setSelectedSlot)}
+
+        {visibleSlots.length === 0 && view !== "month" ? (
           <EmptyStateCard
-            title="Nenhum horario disponivel para o agente oferecer"
-            description="Defina disponibilidade semanal ou desbloqueie periodos para o agente voltar a sugerir horarios com seguranca."
-            actionHref="#regras-agendamento"
-            actionLabel="Adicionar disponibilidade"
+            title="Nenhum horário disponível para o agente oferecer"
+            description="Defina disponibilidade semanal ou desbloqueie períodos para o agente voltar a sugerir horários com segurança."
+            actionLabel="Bloquear período"
+            onAction={openBlockModal}
           />
         ) : null}
       </section>
 
-      <div className="dashboard-columns">
-        <section className="panel" id="regras-agendamento">
-          <div className="panel-heading">
-            <h2>Regras de agendamento</h2>
-            <span className="badge muted">Operacao local</span>
-          </div>
-          <dl className="detail-list">
-            <DetailRow label="Disponibilidade" value="Use os horarios livres da semana como fonte do que a IA pode oferecer." />
-            <DetailRow label="Reservas" value="Horarios reservados ou confirmados nao devem aparecer como opcao para novos leads." />
-            <DetailRow label="Bloqueios" value="Folgas, compromissos e indisponibilidades bloqueiam a oferta imediatamente." />
-            <DetailRow label="Sincronizacao" value="Quando o Google Calendar estiver conectado, erros de sync precisam ser resolvidos antes de confiar na agenda externa." />
-          </dl>
-        </section>
-
-        <section className="panel" id="bloquear-periodo">
-          <div className="panel-heading">
-            <h2>Bloquear periodo</h2>
-            <span className="badge muted">Feito por voce</span>
-          </div>
-          <p className="section-subtitle">
-            Use para folgas, compromissos ou qualquer periodo em que o agente nao deve atender.
-          </p>
-          <form className="form-grid" onSubmit={onBlockSubmit} aria-label="Bloquear periodo">
-            <label className="form-field">
-              <span>Inicio</span>
-              <input
-                type="datetime-local"
-                required
-                value={blockForm.starts_at}
-                onChange={(e) => setBlockForm({ ...blockForm, starts_at: e.target.value })}
-              />
-            </label>
-            <label className="form-field">
-              <span>Fim</span>
-              <input
-                type="datetime-local"
-                required
-                value={blockForm.ends_at}
-                onChange={(e) => setBlockForm({ ...blockForm, ends_at: e.target.value })}
-              />
-            </label>
-            <label className="form-field" style={{ gridColumn: "1 / -1" }}>
-              <span>Motivo opcional</span>
-              <input
-                type="text"
-                value={blockForm.reason}
-                onChange={(e) => setBlockForm({ ...blockForm, reason: e.target.value })}
-                placeholder="Ex.: folga, reuniao, viagem"
-              />
-            </label>
-            <div className="form-field" style={{ gridColumn: "1 / -1" }}>
-              <span>&nbsp;</span>
-              <button className="button" type="submit" disabled={blockBusy}>
-                {blockBusy ? "Bloqueando..." : "Bloquear periodo"}
+      {blockModalOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeBlockModal();
+          }}
+        >
+          <section
+            className="modal block-period-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="block-period-title"
+          >
+            <div className="panel-heading" style={{ marginBottom: 0 }}>
+              <div>
+                <h2 id="block-period-title" style={{ margin: 0 }}>
+                  Bloquear período
+                </h2>
+                <p className="section-subtitle" style={{ margin: "4px 0 0" }}>
+                  Use para folgas, compromissos ou qualquer período em que o agente não deve atender.
+                </p>
+              </div>
+              <button
+                className="drawer-close"
+                type="button"
+                onClick={closeBlockModal}
+                aria-label="Fechar"
+                disabled={blockBusy}
+              >
+                ×
               </button>
             </div>
-          </form>
-          {blockNotice ? (
-            <div
-              className={blockNotice.tone === "ok" ? "panel-notice ok" : "panel-notice"}
-              style={{ marginTop: 12 }}
-            >
-              {blockNotice.message}
-            </div>
-          ) : null}
-        </section>
-      </div>
+            <form className="form-grid" onSubmit={onBlockSubmit} aria-label="Bloquear período">
+              <label className="form-field">
+                <span>Início</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={blockForm.starts_at}
+                  onChange={(e) => setBlockForm({ ...blockForm, starts_at: e.target.value })}
+                />
+              </label>
+              <label className="form-field">
+                <span>Fim</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={blockForm.ends_at}
+                  onChange={(e) => setBlockForm({ ...blockForm, ends_at: e.target.value })}
+                />
+              </label>
+              <label className="form-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Motivo opcional</span>
+                <input
+                  type="text"
+                  value={blockForm.reason}
+                  onChange={(e) => setBlockForm({ ...blockForm, reason: e.target.value })}
+                  placeholder="Ex.: folga, reunião, viagem"
+                />
+              </label>
+              {blockNotice ? (
+                <div
+                  className={blockNotice.tone === "ok" ? "panel-notice ok" : "panel-notice"}
+                  style={{ gridColumn: "1 / -1" }}
+                >
+                  {blockNotice.message}
+                </div>
+              ) : null}
+              <div
+                className="button-row"
+                style={{ gridColumn: "1 / -1", justifyContent: "flex-end" }}
+              >
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={closeBlockModal}
+                  disabled={blockBusy}
+                >
+                  Cancelar
+                </button>
+                <button className="button" type="submit" disabled={blockBusy}>
+                  {blockBusy ? "Bloqueando..." : "Bloquear período"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {selectedSlot ? (
+        <SlotDrawer
+          slot={selectedSlot}
+          onClose={() => setSelectedSlot(null)}
+          onChanged={(next) => {
+            setSelectedSlot(next);
+            void load(committed);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  warning = false,
-  danger = false,
-}: {
-  label: string;
-  value: number | string;
-  detail: string;
-  warning?: boolean;
-  danger?: boolean;
-}) {
+function SystemEventBanner({ outcome }: { outcome: SystemEventOutcome }) {
+  if (outcome.class !== "banner") return null;
   return (
-    <div className={danger ? "metric compact danger" : warning ? "metric compact warning" : "metric compact"}>
-      <span className="metric-label">{label}</span>
-      <span className="metric-value">{typeof value === "number" ? formatNumber(value) : value}</span>
-      <span className="metric-sub">{detail}</span>
+    <div className="panel-notice warning" role="status">
+      <span>{outcome.message}</span>
+      {outcome.action?.href ? (
+        <a className="button secondary" href={outcome.action.href} style={{ marginLeft: 12 }}>
+          {outcome.action.label}
+        </a>
+      ) : null}
     </div>
   );
 }
 
-function ScheduleSlotCard({ slot }: { slot: ScheduleSlotRead }) {
-  const statusClass = slotCardClass(slot);
-  return (
-    <div className={statusClass} title={syncBadgeTitle(slot)}>
-      <div>
-        <strong>
-          {formatTime(slot.starts_at)} - {formatTime(slot.ends_at)}
-        </strong>
-        <span>{scheduleSlotLabel(slot.status)}</span>
-      </div>
-      <div className="schedule-slot-meta">
-        <span>{scheduleSourceLabel(slot.source)}</span>
-        <span>{calendarSyncLabel(slot.calendar_sync_status)}</span>
-      </div>
-    </div>
-  );
+function SystemEventToast({ outcome }: { outcome: SystemEventOutcome }) {
+  if (outcome.class !== "toast") return null;
+  return <div className="panel-notice">{outcome.message}</div>;
 }
 
-function CalendarStatusNotice({ calendar }: { calendar: CalendarStatusRead }) {
-  const message = calendarStatusMessage(calendar);
-  if (!message) return null;
-  return <div className={`panel-notice ${message.tone}`}>{message.text}</div>;
+function renderView(
+  view: AgendaView,
+  items: ScheduleSlotRead[],
+  committed: Filters,
+  onSelectDay: (isoDate: string) => void,
+  onOpenSlot: (slot: ScheduleSlotRead) => void,
+) {
+  const fromDate = committed.from;
+  switch (view) {
+    case "week":
+      return <WeekView items={items} fromDate={fromDate} onOpenSlot={onOpenSlot} />;
+    case "day":
+      return <DayView items={items} fromDate={fromDate} onOpenSlot={onOpenSlot} />;
+    case "month":
+      return <MonthView items={items} fromDate={fromDate} onSelectDay={onSelectDay} />;
+    case "list":
+      return <AgendaListView items={items} onOpenSlot={onOpenSlot} />;
+    case "kanban":
+      return <KanbanView items={items} onOpenSlot={onOpenSlot} />;
+    default:
+      return null;
+  }
 }
 
 function EmptyStateCard({
   title,
   description,
-  actionHref,
   actionLabel,
+  onAction,
 }: {
   title: string;
   description: string;
-  actionHref: string;
   actionLabel: string;
+  onAction: () => void;
 }) {
   return (
     <div className="empty-state-card" style={{ marginTop: 14 }}>
@@ -466,205 +569,14 @@ function EmptyStateCard({
         <strong>{title}</strong>
         <p>{description}</p>
       </div>
-      <a className="button secondary empty-state-action" href={actionHref}>
+      <button
+        className="button secondary empty-state-action"
+        type="button"
+        onClick={onAction}
+      >
         {actionLabel}
-      </a>
+      </button>
     </div>
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  );
-}
-
-function agendaReadiness(
-  stats: ReturnType<typeof summarizeSlots>,
-  calendar: CalendarStatusRead | null,
-  hasError: boolean,
-): { tone: OperationalTone; title: string; description: string } {
-  if (hasError || calendar?.status === "ERROR" || stats.errors > 0) {
-    return {
-      tone: "danger",
-      title: "Agenda precisa de atencao antes de oferecer horarios",
-      description:
-        calendar?.last_sync_error ||
-        "Ha erro de sincronizacao. Revise a agenda para evitar conflito com leads.",
-    };
-  }
-  if (stats.available === 0) {
-    return {
-      tone: "warning",
-      title: "Sem horarios livres para o agente oferecer",
-      description:
-        "Nao ha disponibilidade no periodo filtrado. Adicione horarios livres ou desbloqueie periodos.",
-    };
-  }
-  if (calendar?.status === "LOCAL_CACHE_ONLY" || !calendar) {
-    return {
-      tone: "warning",
-      title: "Agenda local ativa",
-      description:
-        "O agente pode usar os horarios livres desta plataforma, mas eventos externos nao entram automaticamente.",
-    };
-  }
-  if (calendar.status === "UNKNOWN") {
-    return {
-      tone: "warning",
-      title: "Status do Calendar indisponivel",
-      description:
-        "Nao foi possivel confirmar a sincronizacao agora. Use os horarios locais com cautela.",
-    };
-  }
-  if (stats.pending > 0 || calendar.pending_slots > 0) {
-    return {
-      tone: "warning",
-      title: "Sincronizacao pendente",
-      description:
-        "O agente usa a ultima disponibilidade conhecida enquanto o Google Calendar termina de atualizar.",
-    };
-  }
-  return {
-    tone: "ok",
-    title: "Agenda pronta para o agente oferecer horarios",
-    description:
-      "Existem horarios livres e nenhum erro critico de sincronizacao no recorte semanal.",
-  };
-}
-
-function summarizeSlots(items: ScheduleSlotRead[]) {
-  return {
-    available: items.filter((slot) => slot.status === "AVAILABLE").length,
-    reserved: items.filter((slot) => slot.status === "HELD" || slot.status === "CONFIRMED").length,
-    blocked: items.filter((slot) => slot.status === "BLOCKED").length,
-    errors: items.filter((slot) => slot.calendar_sync_status === "ERROR").length,
-    pending: items.filter((slot) => slot.calendar_sync_status === "PENDING").length,
-  };
-}
-
-function buildWeekDays(from: string, items: ScheduleSlotRead[]) {
-  const start = toLocalDateStart(from);
-  const map = new Map<string, ScheduleSlotRead[]>();
-  for (let i = 0; i < 7; i += 1) {
-    const day = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
-    map.set(formatDateKey(day.toISOString()), []);
-  }
-  for (const item of items) {
-    const key = formatDateKey(item.starts_at);
-    const existing = map.get(key);
-    if (existing) existing.push(item);
-  }
-  return Array.from(map.entries()).map(([key, dayItems]) => ({
-    key,
-    items: dayItems.slice().sort((a, b) => a.starts_at.localeCompare(b.starts_at)),
-  }));
-}
-
-function filterSlots(items: ScheduleSlotRead[], filters: Filters): ScheduleSlotRead[] {
-  return items.filter((slot) => {
-    if (filters.source && slot.source !== filters.source) return false;
-    if (filters.status && slot.status !== filters.status) return false;
-    if (filters.calendar_sync_status && slot.calendar_sync_status !== filters.calendar_sync_status) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function slotCardClass(slot: ScheduleSlotRead): string {
-  if (slot.calendar_sync_status === "ERROR") return "schedule-slot-card error";
-  if (slot.status === "BLOCKED") return "schedule-slot-card blocked";
-  if (slot.status === "HELD" || slot.status === "CONFIRMED") return "schedule-slot-card reserved";
-  return "schedule-slot-card available";
-}
-
-function calendarSourceLabel(calendar: CalendarStatusRead | null): string {
-  if (!calendar) return "Local";
-  if (calendar.status === "SYNCED") return "Google";
-  if (calendar.status === "ERROR") return "Erro";
-  if (calendar.status === "LOCAL_CACHE_ONLY") return "Local";
-  return "Pendente";
-}
-
-function calendarStatusMessage(calendar: CalendarStatusRead): { tone: "warning" | "ok"; text: string } | null {
-  if (calendar.status === "LOCAL_CACHE_ONLY") {
-    return {
-      tone: "warning",
-      text:
-        "Google Calendar nao conectado. Conecte para evitar conflitos e permitir que o agente ofereca horarios com mais seguranca.",
-    };
-  }
-  if (calendar.status === "ERROR") {
-    return {
-      tone: "warning",
-      text:
-        calendar.last_sync_error ||
-        "Erro de sincronizacao. Revise a conexao antes de liberar novos horarios para o agente.",
-    };
-  }
-  if (calendar.pending_slots > 0) {
-    return {
-      tone: "warning",
-      text: "Sincronizacao pendente. O agente usa a ultima disponibilidade conhecida.",
-    };
-  }
-  if (calendar.status === "SYNCED") {
-    return {
-      tone: "ok",
-      text: "Google Calendar sincronizado. Horarios externos estao sendo considerados.",
-    };
-  }
-  if (calendar.status === "UNKNOWN") {
-    return {
-      tone: "warning",
-      text: "Status do Google Calendar indisponivel. A agenda local continua visivel, mas exige conferencia.",
-    };
-  }
-  return null;
-}
-
-function syncBadgeTitle(slot: ScheduleSlotRead): string {
-  const lastSynced = slot.last_synced_at ? formatDateTime(slot.last_synced_at) : "-";
-  const lines = [`Ultima sincronizacao: ${lastSynced}`];
-  if (slot.last_sync_error) lines.push(`Erro: ${slot.last_sync_error}`);
-  if (slot.external_event_id) lines.push(`Evento externo: ${slot.external_event_id}`);
-  return lines.join("\n");
-}
-
-function toLocalDateStart(value: string): Date {
-  const date = value ? new Date(value) : new Date();
-  if (Number.isNaN(date.getTime())) return new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function toDateTimeLocal(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
-
-function toIsoOrNull(value: string): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-}
-
-function blockErrorMessage(status: number): string {
-  if (status === 409) {
-    return "Ja existe um bloqueio nesse periodo, ou nenhum agente esta ativo no sistema.";
-  }
-  if (status === 401) {
-    return "Sua sessao expirou. Entre novamente para continuar.";
-  }
-  if (status === 422) {
-    return "Algum dado do bloqueio esta invalido. Revise os horarios.";
-  }
-  return "Nao consegui bloquear o periodo. Tente de novo em alguns segundos.";
-}

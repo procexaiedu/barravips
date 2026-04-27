@@ -42,12 +42,6 @@ export type CalendarSyncStatus = "PENDING" | "SYNCED" | "ERROR";
 
 export type MediaType = "image" | "audio" | "video" | "document";
 
-export type MediaApprovalStatus =
-  | "PENDING"
-  | "APPROVED"
-  | "REJECTED"
-  | "REVOKED";
-
 export type ReceiptAnalysisStatus =
   | "PENDING"
   | "VALID"
@@ -133,35 +127,97 @@ export type ClientBrief = {
   language_hint?: string | null;
 };
 
-export type ModelBrief = {
+export type EscortBrief = {
   id: string;
   display_name: string;
 };
 
-export type ModelRead = {
+export type EscortRead = {
   id: string;
   display_name: string;
   is_active: boolean;
-  persona_json: Record<string, unknown>;
-  services_json: Record<string, unknown>;
-  pricing_json: Record<string, unknown>;
   languages: string[];
   calendar_external_id: string | null;
+  photo_main_path: string | null;
   created_at: string;
   updated_at: string;
 };
 
-export type ModelCreateInput = {
-  display_name: string;
-  is_active: boolean;
-  persona_json: Record<string, unknown>;
-  services_json: Record<string, unknown>;
-  pricing_json: Record<string, unknown>;
-  languages: string[];
-  calendar_external_id: string | null;
+export type EscortServiceRead = {
+  id: string;
+  name: string;
+  description: string | null;
+  duration_minutes: number;
+  price_cents: number;
+  restrictions: string | null;
+  sort_order: number;
 };
 
-export type ModelPatchInput = Partial<ModelCreateInput>;
+export type EscortLocationRead = {
+  id: string;
+  city: string;
+  neighborhood: string | null;
+  accepts_displacement: boolean;
+  displacement_fee_cents: number | null;
+  sort_order: number;
+};
+
+export type EscortPreferenceRead = {
+  key: string;
+  value: string;
+};
+
+export type EscortAvailabilityRead = {
+  min_duration_minutes: number | null;
+  advance_booking_minutes: number | null;
+  max_bookings_per_day: number | null;
+};
+
+export type EscortDetailRead = {
+  escort: EscortRead;
+  services: EscortServiceRead[];
+  locations: EscortLocationRead[];
+  preferences: EscortPreferenceRead[];
+  availability: EscortAvailabilityRead;
+};
+
+export type EscortCreateInput = {
+  display_name: string;
+  is_active: boolean;
+  languages: string[];
+  calendar_external_id: string | null;
+  photo_main_path: string | null;
+};
+
+export type EscortPatchInput = Partial<EscortCreateInput>;
+
+export type EscortServiceInput = {
+  name: string;
+  description: string | null;
+  duration_minutes: number;
+  price_cents: number;
+  restrictions: string | null;
+  sort_order: number;
+};
+
+export type EscortLocationInput = {
+  city: string;
+  neighborhood: string | null;
+  accepts_displacement: boolean;
+  displacement_fee_cents: number | null;
+  sort_order: number;
+};
+
+export type EscortPreferenceInput = {
+  key: string;
+  value: string;
+};
+
+export type EscortAvailabilityInput = {
+  min_duration_minutes: number | null;
+  advance_booking_minutes: number | null;
+  max_bookings_per_day: number | null;
+};
 
 export type LastMessageRead = {
   direction: MessageDirection;
@@ -174,7 +230,7 @@ export type LastMessageRead = {
 export type ConversationRead = {
   id: string;
   client: ClientBrief;
-  model: ModelBrief;
+  escort: EscortBrief;
   state: ConversationState;
   flow_type: FlowType;
   handoff_status: HandoffStatus;
@@ -247,8 +303,8 @@ export type ConversationMediaRef = {
   id: string;
   model_id: string;
   media_type: MediaType;
-  category: string | null;
-  approval_status: MediaApprovalStatus;
+  tags: string[];
+  is_active: boolean;
   metadata_json: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -273,18 +329,25 @@ export type ScheduleSlotRead = {
   calendar_sync_status: CalendarSyncStatus;
   last_synced_at: string | null;
   last_sync_error: string | null;
+  metadata_json: Record<string, unknown> | null;
 };
 
 export type MediaRead = {
   id: string;
   model_id: string;
   media_type: MediaType;
-  category: string | null;
-  approval_status: MediaApprovalStatus;
-  send_constraints_json: Record<string, unknown>;
+  tags: string[];
+  is_active: boolean;
+  deactivated_at: string | null;
   metadata_json: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type MediaTagRead = {
+  tag: string;
+  display_label: string;
+  sort_order: number;
 };
 
 export type MediaUsageWindowRead = {
@@ -314,8 +377,8 @@ export type MediaUsageBreakdownMetric = {
 export type MediaUsageRankItemRead = {
   media_id: string;
   media_type: MediaType;
-  category: string | null;
-  approval_status: MediaApprovalStatus;
+  tags: string[];
+  is_active: boolean;
   count: number;
   drilldown_href: string;
 };
@@ -330,9 +393,7 @@ export type MediaUsageSummaryRead = {
   requested_window: "7d";
   delivery_status_available: boolean;
   windows: Record<MediaUsageWindowKey, MediaUsageWindowRead>;
-  pending: MediaUsageCountMetric;
-  without_category: MediaUsageCountMetric;
-  approved_by_category: MediaUsageBreakdownMetric;
+  active: MediaUsageCountMetric;
   most_used: MediaUsageRankRead;
   send_failures: MediaUsageRankRead;
 };
@@ -341,7 +402,7 @@ export type ReceiptRead = {
   id: string;
   conversation_id: string;
   client: ClientBrief;
-  model: ModelBrief;
+  escort: EscortBrief;
   message_id: string;
   detected_amount: string | number | null;
   expected_amount: string | number | null;
@@ -379,9 +440,24 @@ export type EvolutionStatusRead = {
   provider: "evolution";
   instance: string;
   status: EvolutionStatus;
+  connected: boolean;
   qr_code_ref: string | null;
+  qr_age_seconds: number | null;
   last_event_at: string | null;
+  connected_since: string | null;
   updated_at: string;
+};
+
+export type EvolutionQrCodeRead = {
+  token: string;
+  base64: string;
+  age_seconds: number;
+  expires_in_seconds: number;
+};
+
+export type EvolutionConnectResultRead = {
+  status: "requested" | "already_connected" | "failed";
+  detail: string | null;
 };
 
 export type CalendarStatusRead = {
@@ -546,6 +622,70 @@ export type DashboardFinancialRead = {
   projected_revenue: DashboardFinancialForecastMetric;
 };
 
+export type FinancialWindowKey = "7d" | "30d" | "90d";
+
+export type FinancialReceiptStatusBreakdown = {
+  counts: Record<string, number>;
+  amounts: Record<string, string | number>;
+  meta: DashboardMetricMeta;
+};
+
+export type FinancialMatchRateMetric = {
+  value_percent: number | null;
+  numerator: number;
+  denominator: number;
+  meta: DashboardMetricMeta;
+};
+
+export type FinancialPaymentLagMetric = {
+  average_days: number | null;
+  sample_size: number;
+  meta: DashboardMetricMeta;
+};
+
+export type FinancialLargestDivergence = {
+  receipt_id: string;
+  conversation_id: string;
+  client_display_name: string | null;
+  expected_amount: string | number;
+  detected_amount: string | number;
+  diff_abs: string | number;
+  age_days: number;
+  drilldown_href: string;
+};
+
+export type FinancialDivergenceAging = {
+  threshold_days: number;
+  count: number;
+  total_amount: string | number;
+};
+
+export type FinancialRevenueFunnel = {
+  in_negotiation_amount: string | number;
+  closed_amount: string | number;
+  receipt_received_amount: string | number;
+  receipt_match_amount: string | number;
+  meta: DashboardMetricMeta;
+};
+
+export type FinancialSnapshotRead = {
+  generated_at: string;
+  requested_window: FinancialWindowKey;
+  window_starts_at: string;
+  window_ends_at: string;
+  open_pipeline_total: DashboardAmountMetric;
+  open_pipeline_by_state: DashboardAmountBreakdownMetric;
+  detected_total: DashboardAmountMetric;
+  divergence_abs: DashboardAmountMetric;
+  projected_revenue: DashboardFinancialForecastMetric;
+  receipts_by_status: FinancialReceiptStatusBreakdown;
+  receipt_match_rate: FinancialMatchRateMetric;
+  payment_lag: FinancialPaymentLagMetric;
+  largest_divergence: FinancialLargestDivergence | null;
+  divergence_aging: FinancialDivergenceAging;
+  revenue_funnel: FinancialRevenueFunnel;
+};
+
 export type DashboardSummaryRead = {
   generated_at: string;
   requested_window: "24h";
@@ -558,8 +698,7 @@ export type DashboardSummaryRead = {
   conversations_by_handoff_status: DashboardBreakdownMetric;
   handoffs_opened: DashboardCountMetric;
   handoffs_acknowledged: DashboardCountMetric;
-  media_pending: DashboardCountMetric;
-  media_without_category: DashboardCountMetric;
+  media_active: DashboardCountMetric;
   schedule_slots_next_14d_total: DashboardCountMetric;
   schedule_slots_next_14d_by_status: DashboardBreakdownMetric;
   calendar_sync_pending: DashboardCountMetric;

@@ -192,59 +192,56 @@ Config inicial:
 No MVP:
 
 - arquivos ficam em filesystem local/volume Docker local;
-- Postgres guarda catalogo, metadados, aprovacao e status operacional;
+- Postgres guarda catalogo, metadados, classificacao por tags e estado ativo/inativo;
 - aplicacao resolve caminho fisico pelo identificador no banco;
 - interface de acesso deve permitir migracao futura para MinIO/S3 sem reescrever logica do agente.
 
-Cada midia relevante deve ter pelo menos:
+Cada midia tem:
 
 - modelo associada;
-- tipo de arquivo;
-- categoria;
+- tipo de arquivo (image, audio, video, document);
 - caminho interno de armazenamento;
-- status de aprovacao;
-- restricoes de envio;
+- estado `is_active` (default true; quando false grava tambem `deactivated_at`);
+- conjunto de tags (multi-valorada, vocabulario controlado em `app.media_tag_vocabulary`);
+- `metadata_json` com MIME real, tamanho e nome original do arquivo;
 - timestamps de criacao e atualizacao.
+
+Nao existe workflow editorial multi-estagio: o operador e o unico curador. Subiu, esta na biblioteca; desativou, sai da operacao ativa. Nao ha aprovacao por terceiros, nem permissao de IA separada do estado, nem instrucao de uso por midia.
 
 ## Regras de envio e selecao de midia
 
 Tipos relevantes:
 
 - fotos da modelo;
-- videos de visualizacao unica;
+- videos enviados como visualizacao unica (regra fixa do canal, nao do catalogo);
 - foto de fachada/portaria recebida do cliente;
 - comprovante por imagem;
 - audios.
 
 Regras:
 
-- fotos e videos da modelo vem de banco pre-definido por modelo;
+- fotos e videos da modelo vem do catalogo (`app.media_assets` filtrado por `model_id` e `is_active = true`);
 - agente so envia foto ou video quando cliente pedir explicitamente;
-- videos devem sustentar narrativa de material pessoal e contextual;
+- ao enviar video pela Evolution API, sempre marcar `viewOnce = true` (regra do envio, nao flag por midia);
 - escolha de midia nao deve ficar livre no texto do agente;
 - selecao deve ser deterministica e registrada em tool propria.
 
 Ordem de selecao:
 
-1. Filtrar por modelo, tipo solicitado e midia aprovada.
-2. Se houver contexto util, filtrar tambem por categoria.
-3. Excluir midias ja enviadas para aquele cliente.
+1. Filtrar por modelo, tipo solicitado e `is_active = true`.
+2. Se houver contexto util, filtrar tambem por tag (`app.media_tags`).
+3. Excluir midias ja enviadas para aquele cliente (via `app.messages.media_id`).
 4. Entre elegiveis, priorizar a menos usada globalmente.
 5. Se todas ja foram enviadas, repetir a mais antiga.
 
-Catalogo pode permitir categorias como:
-
-- casual;
-- elegante;
-- sensual leve;
-- ambiente.
+Vocabulario inicial de tags (consolidado pela migration 004 sobre o seed da 003): `rosto`, `corpo`, `casual`, `sensual`, `elegante`, `lingerie`, `praia-piscina`, `ambiente`. Refletem styling, foco da imagem e cenario, que sao as dimensoes que o agente cruza com o pedido do cliente. Para acrescentar tags: INSERT direto em `app.media_tag_vocabulary` (UI de gestao de vocabulario fora do escopo do MVP).
 
 ## Publicacao de midia
 
 No MVP, entrada de novas midias e manual:
 
-1. Operacao adiciona arquivo ao acervo local.
-2. Operacao revisa e aprova.
-3. Somente depois a midia fica elegivel para uso automatico.
+1. Operadora envia o arquivo para o operador (fora do sistema).
+2. Operador faz upload em `/midias` selecionando as tags aplicaveis. Por default a midia ja entra ativa.
+3. A qualquer momento, o operador pode desativar (toggle) ou trocar as tags da midia.
 
 MinIO/S3 e URLs assinadas ficam para futuro se filesystem local virar gargalo operacional.

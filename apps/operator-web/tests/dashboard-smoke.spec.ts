@@ -8,24 +8,23 @@ test("dashboard renders through the operator BFF", async ({ page }) => {
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Command center SDR", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Acompanhamento comercial", exact: true })).toBeVisible();
   await expect(page.getByText("BarraVips")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Fila de prioridade", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Para resolver agora", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Performance", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Funil e handoffs", exact: true })).toBeVisible();
-  await expect(page.getByText("Próximo passo:").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Resumo de hoje", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Funil comercial", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Evolucao no periodo", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Receita acompanhada", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Leitura rapida", exact: true })).toBeVisible();
 
   await page.waitForLoadState("networkidle");
 
-  expect(requests.some((url) => url.includes("/api/operator/conversations"))).toBe(true);
-  expect(requests.some((url) => url.includes("/api/operator/dashboard/health"))).toBe(true);
-  expect(requests.some((url) => url.includes("/api/operator/dashboard/queues"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/summary"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/financial/timeseries?days=7"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/health"))).toBe(false);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/queues"))).toBe(false);
   expect(requests.some((url) => url.includes("/api/operator/receipts"))).toBe(true);
-  expect(requests.some((url) => url.includes("/api/operator/handoffs/summary"))).toBe(true);
-  expect(requests.some((url) => url.includes("/api/operator/models/active"))).toBe(true);
-  expect(requests.some((url) => url.includes("/api/operator/status/agent"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/escorts/active"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/status/agent"))).toBe(false);
   expect(requests.filter(isApiRequest).every((url) => new URL(url).pathname.startsWith("/api/operator/"))).toBe(true);
   expect(requests.some(isDirectBackendRequest)).toBe(false);
   expect(await page.content()).not.toContain("dev-operator-api-key");
@@ -36,14 +35,14 @@ test("dashboard handles empty BFF states", async ({ page }) => {
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
-  await expect(page.getByText("Agente nas últimas 24h", { exact: true })).toBeVisible();
-  await expect(page.getByText("Nenhuma execução nas últimas 24h.")).toBeVisible();
-  await expect(page.getByText("Comprovantes para revisar", { exact: true })).toBeVisible();
-  await expect(page.getByText("Nenhum comprovante aguardando revisão.")).toBeVisible();
-  await expect(page.getByText("Fila limpa.")).toBeVisible();
-  await expect(page.getByText("Nenhum lead te esperando.")).toBeVisible();
-  await expect(page.getByText("Nenhum agente cadastrado ainda.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Resumo de hoje", exact: true })).toBeVisible();
+  await expect(page.getByText("Novos leads hoje", { exact: true })).toBeVisible();
+  await expect(page.getByText("Conversas ativas", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pipeline aberto", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ultimos 7 dias", exact: true })).toBeVisible();
+  await expect(page.getByText("Sem historico suficiente para comparar.")).toBeVisible();
+  await expect(page.getByText("Fila de prioridade")).toHaveCount(0);
+  await expect(page.getByText("Para resolver agora")).toHaveCount(0);
 });
 
 test("dashboard handles BFF error states", async ({ page }) => {
@@ -51,9 +50,8 @@ test("dashboard handles BFF error states", async ({ page }) => {
 
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
-  await expect(page.getByText("Não consegui montar o resumo completo.")).toBeVisible();
-  await expect(page.getByText("Falha controlada em conversas").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Resumo de hoje", exact: true })).toBeVisible();
+  await expect(page.getByText("Alguns dados ainda nao foram carregados.")).toBeVisible();
 });
 
 test("dashboard sample data fits desktop and mobile", async ({ page }) => {
@@ -69,51 +67,33 @@ test("dashboard sample data fits desktop and mobile", async ({ page }) => {
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("/dashboard");
-    const agentOpsCard = page.locator(".command-card").filter({ hasText: "Agente nas últimas 24h" });
-    const receiptsCard = page.locator(".command-card").filter({ hasText: "Comprovantes para revisar" });
-    await expect(page.getByRole("heading", { name: "Command center", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Fila de prioridade", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Para resolver agora", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Performance", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Funil e handoffs", exact: true })).toBeVisible();
-    await expect(agentOpsCard).toContainText("Agente nas últimas 24h");
-    await expect(agentOpsCard).toContainText("12");
-    await expect(agentOpsCard).toContainText("1 falhas/parciais");
-    await expect(agentOpsCard).toContainText("1 fallback acionado");
-    await expect(agentOpsCard).toContainText("p95 4.2s");
-    await expect(receiptsCard).toContainText("Comprovantes para revisar");
-    await expect(receiptsCard).toContainText("1 aguardando revisão");
-    await expect(receiptsCard).toContainText("ticket médio R$ 620,00");
-    await expect(page.getByText("Pronto p/ humano").first()).toBeVisible();
-    await expect(page.getByText("Taxa de qualificação").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Resumo de hoje", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Funil comercial", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Evolucao no periodo", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Receita acompanhada", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Leitura rapida", exact: true })).toBeVisible();
+    await expect(page.getByText("Novos leads hoje").first()).toBeVisible();
+    await expect(page.getByText("Conversas ativas").first()).toBeVisible();
+    await expect(page.getByText("Pipeline aberto").first()).toBeVisible();
+    await expect(page.getByText("Conversao 30d").first()).toBeVisible();
+    await expect(page.getByText("Ticket medio").first()).toBeVisible();
+    await expect(page.getByText("Pipeline criado").first()).toBeVisible();
+    await expect(page.getByText("Receita detectada").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Ultimos 30 dias", exact: true })).toBeVisible();
     await expect(page.getByText("Leads quentes").first()).toBeVisible();
-    await expect(page.getByText("Conversas paradas").first()).toBeVisible();
-    await expect(page.getByText("Crescimento do pipeline").first()).toBeVisible();
-    await expect(page.getByText("Próximo passo:").first()).toBeVisible();
-
-    await expect(page.getByRole("heading", { name: "Financeiro", exact: true })).toBeVisible();
-    const financialLabels = [
-      "Pipeline aberto",
-      "Pipeline por estado",
-      "Ticket médio (7d)",
-      "Detectado (7d)",
-      "Divergência (7d)",
-      "Crescimento do pipeline (7d)",
-      "Taxa de conversão (30d)",
-      "Receita projetada",
-    ];
-    for (const label of financialLabels) {
-      await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
-    }
-    const financialCards = page.locator(".command-card-value").filter({ hasText: /^R\$/ });
-    expect(await financialCards.count()).toBeGreaterThanOrEqual(5);
+    await expect(page.getByText("Total acompanhado").first()).toBeVisible();
+    await expect(page.getByText("R$ 4.500,00").first()).toBeVisible();
+    await expect(page.getByText("R$ 620,00").first()).toBeVisible();
     await expect(page.getByText("+30%", { exact: true })).toBeVisible();
     await expect(page.getByText("33%", { exact: true })).toBeVisible();
-    await expect(page.getByText("4/12 fechadas", { exact: true })).toBeVisible();
+    await expect(page.getByText("4 de 12 oportunidades fechadas.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Fila de prioridade")).toHaveCount(0);
+    await expect(page.getByText("Para resolver agora")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   }
 
   expect(requests.filter(isApiRequest).every((url) => new URL(url).pathname.startsWith("/api/operator/"))).toBe(true);
+  expect(requests.some((url) => url.includes("/api/operator/dashboard/financial/timeseries?days=7"))).toBe(true);
 });
 
 test("conversas renders as commercial inbox with drawer", async ({ page }) => {
@@ -136,18 +116,19 @@ test("conversas renders as commercial inbox with drawer", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
 });
 
-test("leads para assumir renders SLA queue", async ({ page }) => {
+test("escaladas renders exception queue", async ({ page }) => {
   await mockDashboardBff(page, "sample");
 
   await page.goto("/handoffs");
 
-  await expect(page.getByRole("heading", { name: "Leads para assumir", exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Aguardando humano").first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Atrasados", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Atenção", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Dentro do prazo", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Escaladas para a modelo", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Aguardando a modelo", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Em atendimento pela modelo", exact: true })).toBeVisible();
   await expect(page.getByText("Motivo").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Assumir agora", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Assumir" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Ver conversa" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancelar escalada" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Devolver para IA" }).first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -173,7 +154,7 @@ test("status page renders and hits the status BFF endpoints", async ({ page }) =
 test("operator shell stays usable on mobile viewport", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/dashboard");
-  await expect(page.getByRole("heading", { name: "Command center SDR", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Acompanhamento comercial", exact: true })).toBeVisible();
   await expect(page.getByLabel("Menu principal")).toBeVisible();
 
   await page.goto("/status");
@@ -214,9 +195,9 @@ test("midias usage summary fits desktop and mobile", async ({ page }) => {
 test("main operator routes render inside the shell", async ({ page }) => {
   const routes = [
     ["/", "Visão geral"],
-    ["/dashboard", "Command center SDR"],
+    ["/dashboard", "Acompanhamento comercial"],
     ["/conversas", "Conversas"],
-    ["/handoffs", "Leads para assumir"],
+    ["/handoffs", "Escaladas para a modelo"],
     ["/agenda", "Agenda"],
     ["/midias", "Biblioteca de materiais"],
     ["/comprovantes", "Comprovantes"],
@@ -258,6 +239,11 @@ async function mockDashboardBff(
         return;
       }
       await route.fulfill({ json: mode === "sample" ? sample.summary : emptySummary() });
+      return;
+    }
+    if (url.pathname === "/api/operator/dashboard/financial/timeseries") {
+      const days = Number(url.searchParams.get("days") ?? 7);
+      await route.fulfill({ json: financialTimeseries(days, mode === "sample") });
       return;
     }
     if (url.pathname === "/api/operator/dashboard/health") {
@@ -305,14 +291,14 @@ async function mockDashboardBff(
       await route.fulfill({ json: mode === "sample" ? envelope(sample.receipts, 1) : envelope([]) });
       return;
     }
-    if (url.pathname === "/api/operator/models/active") {
+    if (url.pathname === "/api/operator/escorts/active") {
       if (mode === "sample") {
-        await route.fulfill({ json: sample.model });
+        await route.fulfill({ json: sample.escort });
         return;
       }
       await route.fulfill({
         status: 404,
-        json: { error: { status: 404, message: "Nenhuma modelo ativa" } },
+        json: { error: { status: 404, message: "Nenhuma acompanhante ativa" } },
       });
       return;
     }
@@ -486,6 +472,38 @@ function emptyHandoffSummary() {
     ackAverage: null,
     releaseAverage: null,
   });
+}
+
+function financialTimeseries(days: number, withValues: boolean) {
+  const end = new Date("2026-04-22T00:00:00.000Z");
+  const valueStart = Math.max(0, days - 7);
+  const points = Array.from({ length: days }, (_, index) => {
+    const date = new Date(end);
+    date.setDate(end.getDate() - (days - index - 1));
+    const active = withValues && index >= valueStart;
+    const weight = index - valueStart + 1;
+    return {
+      date: date.toISOString().slice(0, 10),
+      pipeline_new_amount: active ? String(weight * 100) : "0",
+      detected_total_amount: active ? String(weight * 50) : "0",
+      avg_ticket_amount: active ? "620.00" : null,
+      conversions_count: active && weight % 2 === 0 ? 1 : 0,
+      terminal_count: active ? 1 : 0,
+    };
+  });
+
+  return {
+    days,
+    starts_at: points[0]?.date ? `${points[0].date}T00:00:00.000Z` : null,
+    ends_at: "2026-04-23T00:00:00.000Z",
+    points,
+    meta: {
+      source: "app.conversations.created_at + app.receipts.created_at aggregated by day",
+      window: "requested",
+      sample_method: "full_aggregate",
+      sample_size: points.length,
+    },
+  };
 }
 
 function emptyDashboardHealth() {
@@ -736,15 +754,13 @@ function sampleDashboardData() {
         updated_at: iso(20),
       },
     ],
-    model: {
+    escort: {
       id: "model-1",
       display_name: "Modelo ativa",
       is_active: true,
-      persona_json: { tom: "PENDING_DECISION" },
-      services_json: {},
-      pricing_json: {},
       languages: [],
       calendar_external_id: null,
+      photo_main_path: null,
       created_at: iso(500),
       updated_at: iso(20),
     },

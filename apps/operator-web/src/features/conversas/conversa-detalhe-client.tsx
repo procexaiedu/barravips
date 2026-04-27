@@ -25,7 +25,6 @@ import {
   flowTypeLabel,
   handoffReasonLabel,
   handoffStatusLabel,
-  mediaApprovalLabel,
   mediaTypeLabel,
   receiptAnalysisStatusLabel,
   urgencyProfileLabel,
@@ -187,7 +186,7 @@ export function ConversaDetalheClient({ conversationId }: Props) {
           </div>
           <div>
             <dt>Modelo</dt>
-            <dd>{conversation.model.display_name}</dd>
+            <dd>{conversation.escort.display_name}</dd>
           </div>
           <div>
             <dt>Tipo de cliente</dt>
@@ -359,7 +358,7 @@ export function ConversaDetalheClient({ conversationId }: Props) {
                 <thead>
                   <tr>
                     <th>Tipo</th>
-                    <th>Categoria</th>
+                    <th>Tags</th>
                     <th>Situação</th>
                     <th className="numeric">Atualizada</th>
                   </tr>
@@ -368,14 +367,18 @@ export function ConversaDetalheClient({ conversationId }: Props) {
                   {detail.media.map((media) => (
                     <tr key={media.id}>
                       <td>{mediaTypeLabel(media.media_type)}</td>
-                      <td className="muted-cell">{media.category || "-"}</td>
+                      <td className="muted-cell">
+                        {media.tags.length === 0
+                          ? "-"
+                          : media.tags.map((tag) => (
+                              <span key={tag} className="chip" style={{ marginRight: 4 }}>
+                                {tag}
+                              </span>
+                            ))}
+                      </td>
                       <td>
-                        <span
-                          className={
-                            media.approval_status === "APPROVED" ? "chip gold" : "chip"
-                          }
-                        >
-                          {mediaApprovalLabel(media.approval_status)}
+                        <span className={media.is_active ? "chip gold" : "chip"}>
+                          {media.is_active ? "Ativa" : "Inativa"}
                         </span>
                       </td>
                       <td className="numeric muted-cell">

@@ -6,7 +6,7 @@ export default function ComprovantesPage() {
     <section className="page-stack">
       <PageHeader
         title="Comprovantes"
-        description="Fila de revisão para pagamentos, contratos, propostas assinadas e documentos enviados pelos leads."
+        description="Confira se o valor do comprovante bate com o combinado pela IA antes de confirmar o pagamento."
         eyebrow="Operação · Comprovantes"
       />
       <ComprovantesClient />

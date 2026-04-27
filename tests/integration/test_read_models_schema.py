@@ -25,7 +25,7 @@ from barra_vips_contracts.v1 import (
     DashboardSummaryRead,
     EvolutionStatusRead,
     HandoffSummaryRead,
-    ModelRead,
+    EscortRead,
     MediaUsageSummaryRead,
     PaginatedEnvelope,
     ReceiptRead,
@@ -57,7 +57,7 @@ def isolated_dashboard_db(app) -> Iterator[tuple[TestClient, Any]]:
           app.raw_webhook_events,
           app.integration_status,
           app.clients,
-          app.models
+          app.escorts
         CASCADE
         """
     )
@@ -79,16 +79,13 @@ def _insert_dashboard_summary_fixture(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-0000000000aa"
     conn.execute(
         """
-        INSERT INTO app.models (
-          id, display_name, is_active, persona_json, services_json, pricing_json, languages, calendar_external_id
+        INSERT INTO app.escorts (
+          id, display_name, is_active, languages, calendar_external_id
         )
         VALUES (
           %(model_id)s,
           'Modelo Dashboard Fixture',
           true,
-          '{"tom": "PENDING_DECISION"}'::jsonb,
-          '{}'::jsonb,
-          '{}'::jsonb,
           ARRAY[]::text[],
           NULL
         )
@@ -173,27 +170,26 @@ def _insert_dashboard_summary_fixture(conn: Any) -> None:
         """
     )
     media_rows = [
-        ("40000000-0000-0000-0000-0000000000a1", "image", None, "PENDING", "pending-null.jpg"),
-        ("40000000-0000-0000-0000-0000000000a2", "video", "portfolio", "PENDING", "pending-category.mp4"),
-        ("40000000-0000-0000-0000-0000000000a3", "image", "", "APPROVED", "approved-empty.jpg"),
+        ("40000000-0000-0000-0000-0000000000a1", "image", True, "active-1.jpg"),
+        ("40000000-0000-0000-0000-0000000000a2", "video", True, "active-2.mp4"),
+        ("40000000-0000-0000-0000-0000000000a3", "image", False, "inactive-3.jpg"),
     ]
-    for media_id, media_type, category, approval_status, storage_path in media_rows:
+    for media_id, media_type, is_active, storage_path in media_rows:
         conn.execute(
             """
             INSERT INTO app.media_assets (
-              id, model_id, media_type, category, storage_path, approval_status
+              id, model_id, media_type, storage_path, is_active
             ) VALUES (
-              %(id)s, %(model_id)s, %(media_type)s, %(category)s,
-              %(storage_path)s, %(approval_status)s
+              %(id)s, %(model_id)s, %(media_type)s,
+              %(storage_path)s, %(is_active)s
             )
             """,
             {
                 "id": media_id,
                 "model_id": model_id,
                 "media_type": media_type,
-                "category": category,
                 "storage_path": storage_path,
-                "approval_status": approval_status,
+                "is_active": is_active,
             },
         )
     slots = [
@@ -226,7 +222,7 @@ def _insert_dashboard_queue_fixture(conn: Any) -> dict[str, str]:
     model_id = "10000000-0000-0000-0000-0000000000bb"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Queue Fixture', true)
         """,
         {"model_id": model_id},
@@ -325,7 +321,7 @@ def _insert_receipts_fixture(conn: Any) -> dict[str, str]:
     model_id = "10000000-0000-0000-0000-0000000000ee"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Receipt Fixture', true)
         """,
         {"model_id": model_id},
@@ -394,7 +390,7 @@ def _insert_dashboard_financial_fixture(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-0000000000ff"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Financial Fixture', true)
         """,
         {"model_id": model_id},
@@ -552,7 +548,7 @@ def _insert_dashboard_growth_fixture(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-0000000000ab"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Growth Fixture', true)
         """,
         {"model_id": model_id},
@@ -636,42 +632,39 @@ def _insert_dashboard_growth_fixture(conn: Any) -> None:
 @pytest.fixture()
 def without_active_model() -> Iterator[None]:
     with connect() as conn:
-        row = conn.execute("SELECT id FROM app.models WHERE is_active = true").fetchone()
+        row = conn.execute("SELECT id FROM app.escorts WHERE is_active = true").fetchone()
         active_model_id = row["id"] if row else SEED_MODEL_ID
-        conn.execute("UPDATE app.models SET is_active = false WHERE is_active = true")
+        conn.execute("UPDATE app.escorts SET is_active = false WHERE is_active = true")
     try:
         yield
     finally:
         with connect() as conn:
-            conn.execute("UPDATE app.models SET is_active = false WHERE is_active = true")
+            conn.execute("UPDATE app.escorts SET is_active = false WHERE is_active = true")
             conn.execute(
-                "UPDATE app.models SET is_active = true WHERE id = %(id)s",
+                "UPDATE app.escorts SET is_active = true WHERE id = %(id)s",
                 {"id": active_model_id},
             )
 
 
-class TestActiveModelRead:
-    def test_active_model_matches_contract_and_seed(self, client, api_headers, seed_model_id):
-        response = client.get("/api/models/active", headers=api_headers)
+class TestActiveEscortRead:
+    def test_active_escort_matches_contract_and_seed(self, client, api_headers, seed_model_id):
+        response = client.get("/api/escorts/active", headers=api_headers)
         assert response.status_code == 200, response.text
-        model = ModelRead.model_validate(response.json())
+        model = EscortRead.model_validate(response.json())
         assert model.id == seed_model_id
         assert model.display_name == "Modelo em cadastro"
         assert model.is_active is True
-        assert model.persona_json["fixture_only"] is True
-        assert model.services_json["fixture_only"] is True
-        assert model.pricing_json["fixture_only"] is True
         assert model.languages == []
         assert model.calendar_external_id is None
 
     def test_active_model_requires_operator_api_key(self, client):
-        response = client.get("/api/models/active")
+        response = client.get("/api/escorts/active")
         assert response.status_code == 401
 
     def test_active_model_returns_404_when_missing(self, client, api_headers, without_active_model):
-        response = client.get("/api/models/active", headers=api_headers)
+        response = client.get("/api/escorts/active", headers=api_headers)
         assert response.status_code == 404
-        assert response.json()["detail"] == "active model not found"
+        assert response.json()["detail"] == "active escort not found"
 
 
 class TestDashboardSummaryRead:
@@ -693,8 +686,7 @@ class TestDashboardSummaryRead:
         assert summary.new_conversations_today.value == 0
         assert summary.handoffs_opened.value == 0
         assert summary.handoffs_acknowledged.value == 0
-        assert summary.media_pending.value == 0
-        assert summary.media_without_category.value == 0
+        assert summary.media_active.value == 0
         assert summary.schedule_slots_next_14d_total.value == 0
         assert summary.calendar_sync_pending.value == 0
         assert summary.calendar_sync_error.value == 0
@@ -761,8 +753,7 @@ class TestDashboardSummaryRead:
         assert summary.conversations_by_handoff_status.counts["ACKNOWLEDGED"] == 1
         assert summary.handoffs_opened.value == 1
         assert summary.handoffs_acknowledged.value == 1
-        assert summary.media_pending.value == 2
-        assert summary.media_without_category.value == 2
+        assert summary.media_active.value == 2
         assert summary.schedule_slots_next_14d_total.value == 4
         assert summary.schedule_slots_next_14d_by_status.counts["BLOCKED"] == 1
         assert summary.schedule_slots_next_14d_by_status.counts["CONFIRMED"] == 1
@@ -1022,9 +1013,7 @@ class TestMediaUsageSummaryRead:
 
         summary = MediaUsageSummaryRead.model_validate(response.json())
         assert summary.requested_window == "7d"
-        assert summary.pending.value == 2
-        assert summary.without_category.value == 2
-        assert summary.approved_by_category.counts == {"SEM_CATEGORIA": 1}
+        assert summary.active.value == 2
         assert summary.most_used.meta.source == "app.messages.media_id + app.messages.provider_message_at/created_at"
         assert summary.most_used.meta.window == "requested"
         assert summary.most_used.meta.sample_size == 3
@@ -1095,7 +1084,7 @@ def _insert_handoff_summary_fixture(conn: Any) -> None:
     model_id = "10000000-0000-0000-0000-0000000000cc"
     conn.execute(
         """
-        INSERT INTO app.models (id, display_name, is_active)
+        INSERT INTO app.escorts (id, display_name, is_active)
         VALUES (%(model_id)s, 'Modelo Handoff Summary Fixture', true)
         """,
         {"model_id": model_id},
@@ -1616,7 +1605,7 @@ class TestAgentStatus:
         conversation_id = "33000000-0000-0000-0000-0000000000d1"
         conn.execute(
             """
-            INSERT INTO app.models (id, display_name, is_active)
+            INSERT INTO app.escorts (id, display_name, is_active)
             VALUES (%(model_id)s, 'Modelo Agent Status Fixture', true)
             """,
             {"model_id": model_id},

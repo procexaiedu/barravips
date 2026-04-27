@@ -5,9 +5,9 @@ export default function HandoffsPage() {
   return (
     <section className="page-stack">
       <PageHeader
-        title="Leads para assumir"
-        description="Fila de atendimento humano com motivo, urgência, SLA e ação direta para assumir o lead."
-        eyebrow="Operação · Atendimento humano"
+        title="Escaladas para a modelo"
+        description="A IA escalou para a modelo. Acompanhe até ela assumir no WhatsApp e o atendimento terminar. Intervenha apenas em exceções."
+        eyebrow="Operação · Handoff"
       />
       <HandoffsClient />
     </section>
