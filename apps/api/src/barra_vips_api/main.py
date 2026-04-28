@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -55,6 +56,8 @@ from .db import get_conn
 from .evolution_client import EvolutionClient, EvolutionClientError, get_evolution_client
 from .media import MEDIA_TAG_VALUES, MEDIA_TAGS, MIME_EXTENSIONS, MEDIA_TYPES, detect_mime, ensure_inside
 from .qr_buffer import qr_buffer
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleBlockRequest(BaseModel):
@@ -3956,21 +3959,37 @@ async def _dispatch_inbound_to_agent(
 
     Roda apos o webhook responder 200 (FastAPI BackgroundTasks). Falhas sao
     logadas e nao re-elevadas — webhook ja respondeu OK ao Evolution e nao
-    queremos retry no nivel HTTP.
+    queremos retry no nivel HTTP. Reerguer a excecao aqui faria o
+    AsyncExitStackMiddleware fechar a connection do request com erro ativo,
+    e o psycopg faria ROLLBACK das gravacoes em raw_webhook_events / messages.
     """
-    from barra_vips_agent.debounce import (
-        BufferedMessage,
-        get_debounce_manager,
-    )
+    try:
+        from barra_vips_agent.debounce import (
+            BufferedMessage,
+            get_debounce_manager,
+        )
+    except ImportError:
+        logger.warning(
+            "agent_dispatch_skipped reason=module_not_installed conversation_id=%s",
+            conversation_id,
+        )
+        return
 
-    manager = get_debounce_manager()
-    msg = BufferedMessage(
-        text=text,
-        message_type=message_type,
-        external_message_id=external_message_id,
-        from_me=False,
-    )
-    await manager.submit(conversation_id, msg, trace_id)
+    try:
+        manager = get_debounce_manager()
+        msg = BufferedMessage(
+            text=text,
+            message_type=message_type,
+            external_message_id=external_message_id,
+            from_me=False,
+        )
+        await manager.submit(conversation_id, msg, trace_id)
+    except Exception:
+        logger.exception(
+            "agent_dispatch_failed conversation_id=%s trace_id=%s",
+            conversation_id,
+            trace_id,
+        )
 
 
 def _insert_raw_event(
